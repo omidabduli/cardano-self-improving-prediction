@@ -34,7 +34,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      # the newest record, not the commit this run was triggered from: runs queue behind
+      # each other and every run commits new data
       - uses: actions/checkout@v7
+        with:
+          ref: main
 
       - uses: actions/setup-node@v7
         with:
@@ -52,15 +56,20 @@ jobs:
         run: |
           git config user.name 'adaptive-bot'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add data
-          if git diff --cached --quiet; then
-            echo 'Nothing new to record'
-            exit 0
-          fi
-          git commit -q -m "record $(jq -r .updatedAt data/status.json) · gen $(jq -r .model.generation data/status.json)"
           for attempt in 1 2 3; do
-            if git pull -q --rebase origin main && git push -q origin HEAD:main; then exit 0; fi
-            sleep $((attempt * 5))
+            git add data
+            if git diff --cached --quiet; then
+              echo 'Nothing new to record'
+              exit 0
+            fi
+            git commit -q -m "record $(jq -r .updatedAt data/status.json) · gen $(jq -r .model.generation data/status.json)"
+            if git push -q origin HEAD:main; then exit 0; fi
+            # Another commit landed first. Two records can't be merged, so start again from
+            # the newest one: the replay is deterministic and picks up where that one ends.
+            echo "::notice::main moved on, replaying on top of the newest record (attempt $attempt)"
+            git fetch -q origin main
+            git reset -q --hard origin/main
+            node engine/run.mjs ${{ inputs.evolve && '--evolve' || '' }} || true
           done
           echo '::error::could not push the record'
           exit 1
