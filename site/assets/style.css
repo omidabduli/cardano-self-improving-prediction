@@ -230,6 +230,8 @@ main { max-width: 1320px; margin: 0 auto; padding: 0 16px 40px; }
 .bar { position: relative; height: 4px; border-radius: 9px; background: rgba(148, 170, 220, 0.1); margin-top: 7px; overflow: hidden; }
 .bar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 9px; background: var(--blue); }
 .bar .tick { position: absolute; top: -2px; bottom: -2px; width: 2px; background: rgba(255, 255, 255, 0.6); }
+.record-note { margin: 12px 2px 0; font-size: 12.5px; color: var(--text-3); }
+.record-note b { color: var(--text-2); font-weight: 600; }
 .session { margin-top: 14px; padding: 12px 14px; border-radius: var(--radius-s); border: 1px dashed var(--line-2); color: var(--text-2); font-size: 13.5px; }
 .session b { font-family: var(--mono); }
 

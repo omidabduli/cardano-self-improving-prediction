@@ -683,14 +683,18 @@ function renderStatic() {
   const scored = HORIZONS.reduce((a, h) => a + (s.totals?.all?.[h]?.n || 0), 0);
   $('madeCount').textContent = F.num(scored);
   $('lastUpdate').textContent = `record updated ${F.ago(Date.parse(s.updatedAt))}`;
-  const stale = Date.now() - Date.parse(s.updatedAt) > 75 * 60e3;
+  // GitHub often starts the recording job hours late; that is normal and the record
+  // catches up by itself, so only warn when it is really far behind
+  const behindMs = Date.now() - Date.parse(s.updatedAt);
+  const stale = behindMs > 6 * 3600e3;
+  $('recordNote').innerHTML = `All-time figures come from the official record, updated <b>${F.ago(Date.parse(s.updatedAt))}</b>. The last-24-hours figures also include forecasts your browser has checked since then.`;
   const banner = $('banner');
   if (!app.marketOk) {
     banner.hidden = false;
     banner.textContent = 'The live Binance feed is not reachable from your network, so this page is showing the last published record (updated every 15 minutes).';
   } else if (stale) {
     banner.hidden = false;
-    banner.textContent = `The public record was last updated ${F.ago(Date.parse(s.updatedAt))} (GitHub's scheduler can run late). Your browser is still forecasting live from the last checkpoint.`;
+    banner.textContent = `The official record was last updated ${F.ago(Date.parse(s.updatedAt))}. GitHub sometimes starts the recording job late; it catches up by itself. The forecasts on this page are live.`;
   } else banner.hidden = true;
   renderEvolution();
   renderModelCard();
