@@ -124,41 +124,52 @@ async function main() {
 
   // ---- 3. daily evolution + retraining ----
   const evo = readJSON('evolution.json', { generations: [] });
+  let trainError = null;
   if (needTrain) {
-    const tt = Date.now();
-    const prevCfg = model?.configs || structuredClone(GEN0);
-    const generation = (model?.generation || 0) + 1;
-    const seed = Math.floor(nowMs / 86400000);
-    log(`evolution: generation ${generation}`);
-    let cfg = prevCfg, report;
-    const rounds = bootstrap ? 2 : 1;
-    for (let r = 0; r < rounds; r++) {
-      const res = evolve(ds, cfg, { seed: seed + r * 101, nLinear: bootstrap ? 12 : 8, nForest: bootstrap ? 4 : 3, log });
-      cfg = res.cfg;
-      report = report ? mergeRounds(report, res.report) : res.report;
-    }
-    const trainedAt = new Date().toISOString();
-    model = buildModel(ds, cfg, { id: `g${generation}-${trainedAt.slice(0, 16)}`, trainedAt, generation, seed });
-    evo.generations.push({ gen: generation, at: trainedAt, day: today, report, cfg });
-    log(`retrained generation ${generation} in ${((Date.now() - tt) / 1000).toFixed(1)} s`);
+    // A failed retrain must never stall the public record: keep the current model,
+    // still commit the replayed minutes, and try again on the next run.
+    try {
+      const tt = Date.now();
+      const prevCfg = model?.configs || structuredClone(GEN0);
+      const generation = (model?.generation || 0) + 1;
+      const seed = Math.floor(nowMs / 86400000);
+      log(`evolution: generation ${generation}`);
+      let cfg = prevCfg, report;
+      const rounds = bootstrap ? 2 : 1;
+      for (let r = 0; r < rounds; r++) {
+        const res = evolve(ds, cfg, { seed: seed + r * 101, nLinear: bootstrap ? 12 : 8, nForest: bootstrap ? 4 : 3, log });
+        cfg = res.cfg;
+        report = report ? mergeRounds(report, res.report) : res.report;
+      }
+      const trainedAt = new Date().toISOString();
+      const fresh = buildModel(ds, cfg, { id: `g${generation}-${trainedAt.slice(0, 16)}`, trainedAt, generation, seed });
+      evo.generations.push({ gen: generation, at: trainedAt, day: today, report, cfg });
+      log(`retrained generation ${generation} in ${((Date.now() - tt) / 1000).toFixed(1)} s`);
 
-    if (bootstrap) {
-      log(`warm-up simulation over ${WARMUP_DAYS} days`);
-      const wu = warmup(ds, cfg, WARMUP_DAYS, { log, seed });
-      eng = wu.engine;
-      eng.model = model;
-      eng.s.pending = []; // the public record starts clean with the published model
-      state = eng.snapshot();
-      const quant = (arr, q) => { const v = [...arr].sort((a, b) => a - b); return v[Math.floor(q * (v.length - 1))]; };
-      const pStats = Object.fromEntries(HORIZONS.map((h) => [h, [0.5, 0.8, 0.95].map((q) => Number(quant(wu.pAbs[h], q).toFixed(4)))]));
-      const days = {};
-      for (const [dk, a] of Object.entries(wu.byDay)) days[dk] = Object.fromEntries(HORIZONS.map((h) => [h, roundAgg(a[h])]));
-      writeJSON('backtest.json', { note: 'Walk-forward simulation run once at launch: each day the experts were refit on earlier data only, then the full online system (ensemble weights, conformal bands, calibration) was stepped minute by minute. Hyper-parameters were chosen on overlapping recent days, so treat this as optimistic. The live record is what counts.', from: isoMinute(S.t[S.t.length - WARMUP_DAYS * DAY_MIN]), to: isoMinute(S.t[S.t.length - 1]), days, pAbsQuantiles: pStats });
-      status.liveSince = new Date(state.t + 2 * MINUTE).toISOString();
-      log('p-edge quantiles (50/80/95%):', JSON.stringify(pStats));
+      if (bootstrap) {
+        log(`warm-up simulation over ${WARMUP_DAYS} days`);
+        const wu = warmup(ds, cfg, WARMUP_DAYS, { log, seed });
+        eng = wu.engine;
+        eng.model = fresh;
+        eng.s.pending = []; // the public record starts clean with the published model
+        state = eng.snapshot();
+        const quant = (arr, q) => { const v = [...arr].sort((a, b) => a - b); return v[Math.floor(q * (v.length - 1))]; };
+        const pStats = Object.fromEntries(HORIZONS.map((h) => [h, [0.5, 0.8, 0.95].map((q) => Number(quant(wu.pAbs[h], q).toFixed(4)))]));
+        const days = {};
+        for (const [dk, a] of Object.entries(wu.byDay)) days[dk] = Object.fromEntries(HORIZONS.map((h) => [h, roundAgg(a[h])]));
+        writeJSON('backtest.json', { note: 'Walk-forward simulation run once at launch: each day the experts were refit on earlier data only, then the full online system (ensemble weights, conformal bands, calibration) was stepped minute by minute. Hyper-parameters were chosen on overlapping recent days, so treat this as optimistic. The live record is what counts.', from: isoMinute(S.t[S.t.length - WARMUP_DAYS * DAY_MIN]), to: isoMinute(S.t[S.t.length - 1]), days, pAbsQuantiles: pStats });
+        status.liveSince = new Date(state.t + 2 * MINUTE).toISOString();
+        log('p-edge quantiles (50/80/95%):', JSON.stringify(pStats));
+      }
+      writeJSON('model.json', fresh);
+      writeJSON('evolution.json', evo);
+      model = fresh; // only once it is on disk
+    } catch (e) {
+      if (bootstrap) throw e;
+      trainError = e.message;
+      console.error(e);
+      console.log(`::warning::retraining failed, keeping generation ${model.generation}: ${e.message}`);
     }
-    writeJSON('model.json', model);
-    writeJSON('evolution.json', evo);
   }
 
   // ---- 4. public record ----
@@ -215,6 +226,7 @@ async function main() {
       retrained: needTrain,
       durationMs: Date.now() - started,
       runs: (status.run?.runs || 0) + 1,
+      trainError,
     },
     months,
     days: listPredictionDays().slice(-3),
