@@ -24,6 +24,15 @@ async function getJSON(path) {
   throw err;
 }
 
+/** Milliseconds to add to the local clock to match Binance's server clock. */
+export async function serverClockOffset() {
+  const t0 = Date.now();
+  const { serverTime } = await getJSON('/api/v3/time');
+  const t1 = Date.now();
+  const off = serverTime - (t0 + t1) / 2;
+  return Math.abs(off) > 2000 ? off : 0; // ignore sub-2s differences (network jitter)
+}
+
 /** Closed and open 1m klines for [startMs, endMs]. */
 export async function fetchKlines(symbol, startMs, endMs) {
   const pages = [];

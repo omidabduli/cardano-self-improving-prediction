@@ -8,7 +8,7 @@ import { computeFeatures, D, WARMUP, FEATURES } from '../core/features.js';
 import { expertPredictions, EXPERTS } from '../core/models.js';
 import { Engine } from '../core/engine.js';
 import { emptyAgg, addResolution, mergeAgg, summarize } from '../core/metrics.js';
-import { fetchKlines, LiveStream } from './feed.js';
+import { fetchKlines, LiveStream, serverClockOffset } from './feed.js';
 import { ForecastChart } from './chart.js';
 import * as mini from './mini.js';
 import * as F from './format.js';
@@ -40,6 +40,9 @@ window.adaptive = app;
 
 const $ = (id) => document.getElementById(id);
 const bust = () => Date.now().toString(36);
+// Binance server time: deciding which candle is closed must not depend on the visitor's clock.
+let clockOffset = 0;
+const now = () => Date.now() + clockOffset;
 
 async function getJSON(url) {
   const r = await fetch(url, { cache: 'no-store' });
@@ -54,7 +57,7 @@ async function getText(url) {
 
 // ---------------------------------------------------------------- data access
 
-const lastClosedMinute = () => Math.floor(Date.now() / MINUTE) * MINUTE - MINUTE;
+const lastClosedMinute = () => Math.floor(now() / MINUTE) * MINUTE - MINUTE;
 const predAt = (t) => app.official.get(t) || app.live.get(t);
 const closeAt = (t) => app.ada.get(t)?.c ?? app.csvClose.get(t);
 
@@ -106,29 +109,30 @@ async function loadPublished() {
     modelChanged ? getJSON(`data/evolution.json?v=${encodeURIComponent(status.model.id)}`) : app.evo,
     app.backtest ? app.backtest : getJSON('data/backtest.json').catch(() => null),
   ]);
-  const months = await Promise.all(status.months.map((m) => getJSON(`data/daily/${m}.json?v=${status.t}`).catch(() => null)));
+  const recentMonths = status.months.slice(-6);
+  const months = await Promise.all(recentMonths.map((m) => getJSON(`data/daily/${m}.json?v=${status.t}`).catch(() => null)));
   const csvs = await Promise.all(status.days.slice(-2).map((d) => getText(`data/predictions/${d}.csv?v=${status.t}`).catch(() => '')));
   Object.assign(app, { status, model, state, evo, backtest });
-  status.months.forEach((m, i) => { if (months[i]) app.months[m] = months[i]; });
+  recentMonths.forEach((m, i) => { if (months[i]) app.months[m] = months[i]; });
   for (const txt of csvs) if (txt) parseCSV(txt);
   // live predictions older than the new checkpoint are now in the official record
   for (const t of [...app.live.keys()]) if (t <= state.t) app.live.delete(t);
 }
 
 async function loadCandles(fromMs) {
-  const now = Date.now();
-  const [ada, btc] = await Promise.all([fetchKlines(SYMBOL, fromMs, now), fetchKlines(BTC_SYMBOL, fromMs, now)]);
+  const t = now();
+  const [ada, btc] = await Promise.all([fetchKlines(SYMBOL, fromMs, t), fetchKlines(BTC_SYMBOL, fromMs, t)]);
   for (const k of ada) {
-    if (k.T < now) app.ada.set(k.t, k);
+    if (k.T < t) app.ada.set(k.t, k);
     else app.liveCandle = k;
   }
-  for (const k of btc) if (k.T < now) app.btc.set(k.t, k);
+  for (const k of btc) if (k.T < t) app.btc.set(k.t, k);
   if (app.liveCandle) app.price ??= app.liveCandle.c;
   app.marketOk = true;
 }
 
 function trim() {
-  const cut = Date.now() - KEEP_MIN * MINUTE;
+  const cut = now() - KEEP_MIN * MINUTE;
   for (const m of [app.ada, app.btc, app.live]) for (const t of m.keys()) if (t < cut) m.delete(t);
 }
 
@@ -274,7 +278,7 @@ function renderCards() {
   const pred = latestPred();
   const box = $('forecastCards');
   if (!pred) { box.innerHTML = '<div class="fc"><div class="fc-main">Waiting for the first forecast…</div></div>'; return; }
-  const now = Date.now();
+  const tNow = now();
   box.innerHTML = HORIZONS.map((h) => {
     const x = pred.h[h];
     const up = x.p >= 0.5;
@@ -302,7 +306,7 @@ function renderCards() {
       ${badge}
       <div class="fc-detail"><span>median <b>${F.price(target, 5)}</b></span><span>80% range <b>${lo.toFixed(4)}–${hi.toFixed(4)}</b></span></div>
       <div class="fc-gauge"><i style="left:${gl}%;width:${gw}%;background:${up ? 'var(--up)' : 'var(--down)'}"></i></div>
-      <div class="fc-foot"><span>Checked at ${F.hhmm(due)} · in <b>${F.countdown(due - now)}</b></span>${check}</div>
+      <div class="fc-foot"><span>Checked at ${F.hhmm(due)} · in <b>${F.countdown(due - tNow)}</b></span>${check}</div>
     </div>`;
   }).join('');
 }
@@ -346,9 +350,9 @@ function fanFor(pred) {
 let chart;
 function renderChart() {
   if (!chart) return;
-  const now = Date.now();
+  const tNow = now();
   const H = app.selH;
-  const x0 = now - app.range * MINUTE, x1 = now + 62 * MINUTE;
+  const x0 = tNow - app.range * MINUTE, x1 = tNow + 62 * MINUTE;
   const points = [];
   const lc = lastClosedMinute();
   const startT = Math.floor(x0 / MINUTE) * MINUTE - 3 * MINUTE;
@@ -357,7 +361,7 @@ function renderChart() {
     if (c !== undefined) points.push({ x: t + MINUTE, y: c });
   }
   let live = null;
-  if (app.marketOk && Number.isFinite(app.price)) { live = { x: now, y: app.price }; points.push(live); }
+  if (app.marketOk && Number.isFinite(app.price)) { live = { x: tNow, y: app.price }; points.push(live); }
   else if (points.length) live = null;
   const corridor = [], results = [];
   for (let t = startT - (H + 1) * MINUTE; t <= lc; t += MINUTE) {
@@ -370,7 +374,7 @@ function renderChart() {
     if (o) results.push({ x: xt, s: o.hit === null ? -1 : o.hit });
   }
   const pred = latestPred();
-  chart.set({ x0, x1, now: live ? now : (points.at(-1)?.x ?? now), points, live, corridor, results, fan: fanFor(pred), lookup: tooltip });
+  chart.set({ x0, x1, now: live ? tNow : (points.at(-1)?.x ?? tNow), points, live, corridor, results, fan: fanFor(pred), lookup: tooltip });
   $('chartLoading').hidden = points.length > 0;
 }
 
@@ -428,8 +432,8 @@ function aggWindow(fromT, toT) {
 }
 
 function renderScoreboard() {
-  const now = Date.now();
-  const d1 = aggWindow(now - 24 * 3600e3, now);
+  const tNow = now();
+  const d1 = aggWindow(tNow - 24 * 3600e3, tNow);
   const tot = app.status?.totals;
   const cell = (v, sub, cls = '', barPct = null, tick = null, extra = '') => `<div class="score-cell ${extra}"><div class="v ${cls}">${v}</div><div class="s">${sub}</div>${barPct !== null ? `<div class="bar"><i style="width:${Math.max(0, Math.min(100, barPct))}%"></i>${tick !== null ? `<span class="tick" style="left:${tick}%"></span>` : ''}</div>` : ''}</div>`;
   let html = `<div class="score-row head"><span></span><span>Last 24 hours</span><span>All time</span><span class="opt">80% band hit</span><span class="opt">Confident calls</span></div>`;
@@ -694,9 +698,9 @@ function renderMinute() {
 }
 
 function tick() {
-  const now = Date.now();
-  const next = Math.ceil(now / MINUTE) * MINUTE;
-  $('nextTick').textContent = F.countdown(next - now);
+  const tNow = now();
+  const next = Math.ceil(tNow / MINUTE) * MINUTE;
+  $('nextTick').textContent = F.countdown(next - tNow);
   renderCards();
   renderChart();
 }
@@ -743,6 +747,7 @@ async function boot() {
   }
   renderStatic();
   try {
+    clockOffset = await serverClockOffset().catch(() => 0);
     const lc = lastClosedMinute();
     const from = Math.max(Math.min(lc - 1500 * MINUTE, app.state.t - (WARMUP + 10) * MINUTE), lc - 2900 * MINUTE);
     await loadCandles(from);
