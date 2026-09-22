@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// The pipeline GitHub Actions runs every 15 minutes.
+// The pipeline GitHub Actions runs whenever its schedule fires (in practice a few times a day;
+// the site doesn't depend on it, because the browser computes everything live).
 //
 //   1. fetch the newest 1-minute candles (ADA + BTC)
 //   2. replay every minute since the last checkpoint with the *published* model:
@@ -26,6 +27,8 @@ const opt = (f, d) => { const i = args.indexOf(f); return i >= 0 ? Number(args[i
 const log = (...a) => console.log(...a);
 const FETCH_DAYS_TRAIN = 68; // 60-day max window + 5 validation days + margin
 const WARMUP_DAYS = opt('--warmup-days', 14);
+// how far back one run can backfill if GitHub didn't run the job for a while
+const REPLAY_DAYS = 7;
 
 const bps = (x, d) => (x * 1e4).toFixed(d);
 
@@ -89,7 +92,7 @@ async function main() {
   // ---- 1. data ----
   const fromMs = needTrain
     ? lastClosed - FETCH_DAYS_TRAIN * DAY_MIN * MINUTE
-    : Math.max(state.t - (WARMUP + 5) * MINUTE, lastClosed - 3 * DAY_MIN * MINUTE);
+    : Math.max(state.t - (WARMUP + 5) * MINUTE, lastClosed - REPLAY_DAYS * DAY_MIN * MINUTE);
   const tf = Date.now();
   const [ada, btc] = await Promise.all([
     fetchKlines(SYMBOL, fromMs, lastClosed),

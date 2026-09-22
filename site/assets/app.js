@@ -31,6 +31,9 @@ const app = {
   engine: null, lastPred: null,
   selH: 5, range: 180, councilH: 5, learnH: 5,
   loadedAt: Date.now(), session: Object.fromEntries(HORIZONS.map((h) => [h, emptyAgg()])),
+  // everything the browser has scored since the published checkpoint: added to the official
+  // totals so the page is complete up to this minute, however long ago GitHub last ran
+  sinceCkpt: Object.fromEntries(HORIZONS.map((h) => [h, emptyAgg()])), sinceByDay: {},
   feedSeen: new Set(), firstFeed: true,
   marketOk: false, stream: null, closeTimer: null,
 };
@@ -142,6 +145,8 @@ function trim() {
 function rebuildEngine() {
   app.engine = new Engine(app.model, app.state);
   app.live.clear();
+  app.sinceCkpt = Object.fromEntries(HORIZONS.map((h) => [h, emptyAgg()]));
+  app.sinceByDay = {};
   advance(true);
 }
 
@@ -169,6 +174,10 @@ function advance(replaying = false) {
     const { resolved, pred } = eng.step(S.t[i], S.c[i], Fx.vol[i], mus);
     if (pred) { app.live.set(S.t[i], fromEngine(pred)); app.lastPred = fromEngine(pred); }
     for (const r of resolved) {
+      addResolution(app.sinceCkpt[r.h], r);
+      const day = new Date(r.t).toISOString().slice(0, 10);
+      app.sinceByDay[day] ||= Object.fromEntries(HORIZONS.map((h) => [h, emptyAgg()]));
+      addResolution(app.sinceByDay[day][r.h], r);
       if (!replaying && r.t + r.h * MINUTE + MINUTE >= app.loadedAt) addResolution(app.session[r.h], r);
     }
     changed = true;
@@ -446,7 +455,7 @@ function renderScoreboard() {
   let html = `<div class="score-row head"><span></span><span>Last 24 hours</span><span>All time</span><span class="opt">80% band hit</span><span class="opt">Confident calls</span></div>`;
   for (const h of HORIZONS) {
     const a = summarize(d1[h]);
-    const all = tot ? summarize(tot.all[h]) : null;
+    const all = summarize(mergeAgg(tot?.all?.[h], app.sinceCkpt[h]));
     const accCls = (s) => (!s || s.acc === null ? '' : s.acc > 0.5 ? 'good' : s.acc < 0.5 ? 'bad' : '');
     const c24 = a ? cell(F.pct(a.acc), `${F.num(a.nm)} checked`, accCls(a), a.acc !== null ? (a.acc - 0.4) / 0.2 * 100 : 0, 50) : cell('—', 'no results yet');
     let sig = 'no data yet';
@@ -575,6 +584,9 @@ function renderLearning() {
   const bt = app.backtest?.days || {};
   const live = {};
   for (const m of Object.values(app.months)) Object.assign(live, m.days || {});
+  for (const [d, aggs] of Object.entries(app.sinceByDay)) {
+    live[d] = Object.fromEntries(HORIZONS.map((k) => [k, mergeAgg(live[d]?.[k], aggs[k])]));
+  }
   const days = [...new Set([...Object.keys(bt), ...Object.keys(live)])].sort();
   if (!days.length) { mini.empty($('learnChart'), 'No scored days yet'); mini.empty($('covChart'), ''); return; }
   const acc = (a) => (a && a.nm ? a.hit / a.nm : null);
@@ -657,7 +669,7 @@ function renderHowDiagram() {
       <text x="85" y="110" text-anchor="middle" font-weight="600">Binance</text><text x="85" y="130" text-anchor="middle" fill="#a3b1cc" font-size="11.5">public market data</text>
       <rect x="220" y="60" width="230" height="110" rx="14" fill="url(#hg)" stroke="rgba(91,140,255,.55)"/>
       <text x="335" y="88" text-anchor="middle" font-weight="600">GitHub Actions</text>
-      <text x="335" y="110" text-anchor="middle" fill="#a3b1cc" font-size="11.5">every 15 min: replay · score · learn</text>
+      <text x="335" y="110" text-anchor="middle" fill="#a3b1cc" font-size="11.5">a few times a day: replay · commit</text>
       <text x="335" y="128" text-anchor="middle" fill="#a3b1cc" font-size="11.5">daily 00:00 UTC: evolve · retrain</text>
       <text x="335" y="152" text-anchor="middle" fill="#2ee6c5" font-size="11" font-family="JetBrains Mono">node engine/run.mjs</text>
       <rect x="510" y="80" width="170" height="70" rx="14" fill="rgba(148,170,220,.06)" stroke="rgba(148,170,220,.35)"/>
@@ -680,29 +692,39 @@ function renderStatic() {
   if (!s) return;
   $('genBadge').textContent = `Gen ${s.model.generation} · ${F.ago(Date.parse(s.model.trainedAt))}`;
   $('liveSince').textContent = s.liveSince ? F.dateShort(Date.parse(s.liveSince)) : '—';
-  const scored = HORIZONS.reduce((a, h) => a + (s.totals?.all?.[h]?.n || 0), 0);
-  $('madeCount').textContent = F.num(scored);
-  $('lastUpdate').textContent = `record updated ${F.ago(Date.parse(s.updatedAt))}`;
-  // GitHub often starts the recording job hours late; that is normal and the record
-  // catches up by itself, so only warn when it is really far behind
-  const behindMs = Date.now() - Date.parse(s.updatedAt);
-  const stale = behindMs > 6 * 3600e3;
-  $('recordNote').innerHTML = `All-time figures come from the official record, updated <b>${F.ago(Date.parse(s.updatedAt))}</b>. The last-24-hours figures also include forecasts your browser has checked since then.`;
+  renderCounts();
+  // The page never waits for GitHub: it recomputes everything since the last commit. Only a
+  // gap longer than the browser can replay (about 4 days) is worth a warning.
+  const stale = Date.now() - Date.parse(s.updatedAt) > 3 * 86400e3;
   const banner = $('banner');
   if (!app.marketOk) {
     banner.hidden = false;
-    banner.textContent = 'The live Binance feed is not reachable from your network, so this page is showing the last published record (updated every 15 minutes).';
+    banner.textContent = 'The live Binance feed is not reachable from your network, so this page shows the last committed record.';
   } else if (stale) {
     banner.hidden = false;
-    banner.textContent = `The official record was last updated ${F.ago(Date.parse(s.updatedAt))}. GitHub sometimes starts the recording job late; it catches up by itself. The forecasts on this page are live.`;
+    banner.textContent = `The official record was last committed ${F.ago(Date.parse(s.updatedAt))}, much longer ago than usual. The forecasts and scores on this page are still live.`;
   } else banner.hidden = true;
   renderEvolution();
   renderModelCard();
   renderLearning();
 }
 
+function renderCounts() {
+  const s = app.status;
+  if (!s) return;
+  const since = HORIZONS.reduce((a, h) => a + app.sinceCkpt[h].n, 0);
+  const scored = HORIZONS.reduce((a, h) => a + (s.totals?.all?.[h]?.n || 0), 0) + since;
+  $('madeCount').textContent = F.num(scored);
+  const ago = F.ago(Date.parse(s.updatedAt));
+  $('lastUpdate').textContent = `record committed ${ago}`;
+  $('recordNote').innerHTML = app.marketOk
+    ? `Complete up to this minute. GitHub last committed the official record <b>${ago}</b>; the <b>${F.num(since)}</b> forecasts checked since then were scored here in your browser with the same code and data, exactly as they will be recorded.`
+    : `From the official record, committed <b>${ago}</b>.`;
+}
+
 function renderMinute() {
   trim();
+  renderCounts();
   renderCards();
   renderChart();
   renderScoreboard();
@@ -763,7 +785,7 @@ async function boot() {
   try {
     clockOffset = await serverClockOffset().catch(() => 0);
     const lc = lastClosedMinute();
-    const from = Math.max(Math.min(lc - 1500 * MINUTE, app.state.t - (WARMUP + 10) * MINUTE), lc - 2900 * MINUTE);
+    const from = Math.max(Math.min(lc - 1500 * MINUTE, app.state.t - (WARMUP + 10) * MINUTE), lc - 5800 * MINUTE);
     await loadCandles(from);
     rebuildEngine();
     startStream();

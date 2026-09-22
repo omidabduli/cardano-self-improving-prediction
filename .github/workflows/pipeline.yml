@@ -1,8 +1,12 @@
 name: Learn & publish
 
-# Every 15 minutes: replay each new minute with the published model, score the forecasts
-# that matured, update the online learners, commit the public record and redeploy Pages.
-# Once per UTC day the same run also evolves and retrains the experts.
+# Replay every minute since the last run with the published model, score the forecasts that
+# matured, update the online learners, commit the public record and redeploy Pages. Once per
+# UTC day the same run also evolves and retrains the experts.
+#
+# The schedule asks for every 15 minutes, but nothing depends on that: GitHub may start it only
+# a few times a day, each run backfills everything since the previous one (up to 7 days), and
+# visitors' browsers compute every forecast and score up to the current minute themselves.
 on:
   schedule:
     - cron: '4,19,34,49 * * * *'

@@ -6,7 +6,7 @@
 
 ADAptive forecasts the price of Cardano (ADA/USDT) **5, 15 and 60 minutes ahead**, every minute. Each forecast is written down before the outcome is known, then scored in public. The system learns from every result and evolves its own settings every day.
 
-There is no server. GitHub Actions runs the model every 15 minutes and commits the results to this repository. GitHub Pages serves the site, and your browser runs **the same model code** on the live Binance stream, so the page is never more than a second behind the market.
+There is no server and no external timer. Your browser runs the model on the live Binance stream and computes every forecast and every score up to the current minute. GitHub Actions is the notary: a few times a day, whenever GitHub's scheduler gets to it, it replays every minute since its last run with **the same code**, commits the forecasts and results to this repository, and once a day it evolves and retrains the models. Because each forecast is a fixed function of the published model and public market data, the browser and the record always agree.
 
 ## What you see on the page
 
@@ -71,7 +71,7 @@ Requires Node.js ≥ 22. No dependencies.
 ```bash
 npm test                              # unit tests (causality, model parity, online learners)
 node engine/run.mjs --bootstrap       # fetch 68 days, evolve, train, warm up (~2-5 min)
-node engine/run.mjs                   # a normal 15-minute step
+node engine/run.mjs                   # a normal run: replays everything since the last one
 node engine/serve.mjs                 # preview on http://localhost:8787
 ```
 
@@ -86,7 +86,7 @@ site/            static site served by GitHub Pages
 engine/          Node-only: data fetching, training, gradient boosting, evolution, pipeline
 data/            the public record (committed by the workflow)
 test/            unit tests
-.github/workflows/pipeline.yml   the 15-minute learn & publish job
+.github/workflows/pipeline.yml   the learn & publish job (GitHub's own schedule)
 ```
 
 ## Credits and disclaimer
