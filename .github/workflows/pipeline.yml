@@ -1,0 +1,85 @@
+name: Learn & publish
+
+# Every 15 minutes: replay each new minute with the published model, score the forecasts
+# that matured, update the online learners, commit the public record and redeploy Pages.
+# Once per UTC day the same run also evolves and retrains the experts.
+on:
+  schedule:
+    - cron: '4,19,34,49 * * * *'
+  workflow_dispatch:
+    inputs:
+      evolve:
+        description: 'Run evolution + retraining now'
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - 'engine/**'
+      - 'test/**'
+      - '.github/workflows/pipeline.yml'
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: adaptive-pipeline
+  cancel-in-progress: false
+
+jobs:
+  learn:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Test the engine
+        run: npm test
+
+      - name: Replay, score and learn (evolve once a day)
+        # a market-data outage must not block deploying the site
+        continue-on-error: true
+        run: node engine/run.mjs ${{ inputs.evolve && '--evolve' || '' }}
+
+      - name: Commit the public record
+        run: |
+          git config user.name 'adaptive-bot'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add data
+          if git diff --cached --quiet; then
+            echo 'Nothing new to record'
+            exit 0
+          fi
+          git commit -q -m "record $(jq -r .updatedAt data/status.json) · gen $(jq -r .model.generation data/status.json)"
+          for attempt in 1 2 3; do
+            if git pull -q --rebase origin main && git push -q origin HEAD:main; then exit 0; fi
+            sleep $((attempt * 5))
+          done
+          echo '::error::could not push the record'
+          exit 1
+
+      - name: Build the site
+        run: node engine/build-site.mjs
+
+      - uses: actions/configure-pages@v6
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+  deploy:
+    needs: learn
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

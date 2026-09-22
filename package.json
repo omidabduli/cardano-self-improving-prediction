@@ -1,0 +1,15 @@
+{
+  "name": "cardano-self-improving-prediction",
+  "version": "1.0.0",
+  "description": "ADAptive: a self-improving, publicly scored short-term Cardano (ADA) price predictor that runs on GitHub Actions + GitHub Pages.",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "pipeline": "node engine/run.mjs",
+    "build": "node engine/build-site.mjs",
+    "serve": "node engine/serve.mjs",
+    "test": "node --test test/*.test.mjs"
+  }
+}
