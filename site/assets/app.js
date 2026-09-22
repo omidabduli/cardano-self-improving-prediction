@@ -113,6 +113,7 @@ async function loadPublished() {
   const months = await Promise.all(recentMonths.map((m) => getJSON(`data/daily/${m}.json?v=${status.t}`).catch(() => null)));
   const csvs = await Promise.all(status.days.slice(-2).map((d) => getText(`data/predictions/${d}.csv?v=${status.t}`).catch(() => '')));
   Object.assign(app, { status, model, state, evo, backtest });
+  app.siteVersion ??= status.siteVersion;
   recentMonths.forEach((m, i) => { if (months[i]) app.months[m] = months[i]; });
   for (const txt of csvs) if (txt) parseCSV(txt);
   // live predictions older than the new checkpoint are now in the official record
@@ -197,6 +198,12 @@ function onClosed(t) {
 async function pollStatus() {
   try {
     const s = await getJSON(`data/status.json?t=${bust()}`);
+    if (app.siteVersion && s.siteVersion && s.siteVersion !== app.siteVersion && !app.reloadAt) {
+      // new site code was deployed: reload once GitHub Pages' 10-minute cache has expired,
+      // so long-open pages keep running exactly the code that writes the record
+      app.reloadAt = Date.now() + 11 * 60e3;
+      setTimeout(() => location.reload(), 11 * 60e3);
+    }
     if (app.status && s.t === app.status.t) return;
     await loadPublished();
     if (app.marketOk) rebuildEngine();

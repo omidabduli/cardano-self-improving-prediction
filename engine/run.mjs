@@ -17,7 +17,8 @@ import { Engine } from '../site/core/engine.js';
 import { emptyHorizonAggs, addResolution, mergeAgg, roundAgg } from '../site/core/metrics.js';
 import { fetchKlines, lastHost } from './binance.mjs';
 import { makeDataset, evolve, buildModel, warmup, GEN0 } from './train.mjs';
-import { readJSON, writeJSON, isoDay, isoMinute, appendPredictionRows, listPredictionDays, listMonths } from './store.mjs';
+import { readJSON, writeJSON, isoDay, isoMinute, appendPredictionRows, listPredictionDays, listMonths, ROOT } from './store.mjs';
+import { execSync } from 'node:child_process';
 
 const args = process.argv.slice(2);
 const flag = (f) => args.includes(f);
@@ -27,6 +28,15 @@ const FETCH_DAYS_TRAIN = 68; // 60-day max window + 5 validation days + margin
 const WARMUP_DAYS = opt('--warmup-days', 14);
 
 const bps = (x, d) => (x * 1e4).toFixed(d);
+
+// Fingerprint of the committed site code (git tree hash of site/). Open pages reload when it changes.
+function siteVersion() {
+  try {
+    return execSync('git rev-parse HEAD:site', { cwd: ROOT, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim().slice(0, 12);
+  } catch {
+    return null;
+  }
+}
 
 function csvRow(t, close, pred) {
   const base = `${isoMinute(t)},${close}`;
@@ -213,6 +223,7 @@ async function main() {
   const n = S.t.length;
   const out = {
     updatedAt: new Date().toISOString(),
+    siteVersion: siteVersion(),
     t: state.t,
     price: S.c[n - 1],
     liveSince: status.liveSince,
