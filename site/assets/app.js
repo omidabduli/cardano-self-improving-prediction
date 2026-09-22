@@ -443,7 +443,10 @@ function renderScoreboard() {
     const accCls = (s) => (!s || s.acc === null ? '' : s.acc > 0.5 ? 'good' : s.acc < 0.5 ? 'bad' : '');
     const c24 = a ? cell(F.pct(a.acc), `${F.num(a.nm)} checked`, accCls(a), a.acc !== null ? (a.acc - 0.4) / 0.2 * 100 : 0, 50) : cell('—', 'no results yet');
     let sig = 'no data yet';
-    if (all && all.zscore !== null) {
+    if (all && all.ni < 50) {
+      // the z-test uses non-overlapping calls only; below ~50 of them any verdict is noise
+      sig = `too early to judge (${all.ni}/50 independent calls)`;
+    } else if (all && all.zscore !== null) {
       const z = all.zscore;
       sig = `z = ${z.toFixed(1)} · ${z >= 3 ? 'strong evidence of skill' : z >= 2 ? 'likely skill' : z >= 1 ? 'weak evidence' : 'not beating chance yet'}`;
     }
