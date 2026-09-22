@@ -5,7 +5,8 @@
 //   1. Hedge: each expert's trust weight = exp(-eta * its discounted recent squared error).
 //   2. Adaptive conformal inference: each prediction band widens after misses and narrows
 //      after hits until its hit-rate matches the promised coverage (50/80/95 %).
-//   3. Online logistic calibration: maps the ensemble signal to an honest P(up).
+//   3. Online logistic calibration: maps the ensemble signal to an honest P(up)
+//      (a learned slope only; no up/down bias, so calls never just follow recent drift).
 
 import { HORIZONS, BANDS, BAND_Q, Q_LEVELS, Z_CLIP, ONLINE, STRONG_EDGE } from './config.js';
 
@@ -138,23 +139,16 @@ export class Engine {
     };
   }
 
+  // Online logistic calibration through the origin: P(up) = sigmoid(a * mu). Only the slope
+  // is learned (discounted Newton steps). There is deliberately no bias term: a learned
+  // up/down bias just chases recent drift and made every horizon worse in testing.
   _platt(h, x, u) {
     const pl = this.s.platt[h];
-    const q = sigmoid(pl.a * x + pl.b);
-    const wq = q * (1 - q);
-    const d = this.dP;
-    const pr = plattPrior();
-    // discounted Fisher information, floored at the prior so steps stay bounded
-    let Haa = Math.max(d * pl.H[0] + wq * x * x, pr[0]);
-    let Hab = d * pl.H[1] + wq * x;
-    let Hbb = Math.max(d * pl.H[2] + wq, pr[2]);
-    const det = Haa * Hbb - Hab * Hab;
-    if (det <= 1e-12) { Hab = 0; }
-    const dt = Haa * Hbb - Hab * Hab;
-    const ga = (u - q) * x, gb = (u - q);
-    pl.a = clamp(pl.a + (Hbb * ga - Hab * gb) / dt, 0, ONLINE.plattAMax);
-    pl.b = clamp(pl.b + (Haa * gb - Hab * ga) / dt, -ONLINE.plattBMax, ONLINE.plattBMax);
-    pl.H = [Haa, Hab, Hbb];
+    const q = sigmoid(pl.a * x);
+    const Haa = Math.max(this.dP * pl.H[0] + q * (1 - q) * x * x, plattPrior()[0]);
+    pl.a = clamp(pl.a + ((u - q) * x) / Haa, 0, ONLINE.plattAMax);
+    pl.b = 0;
+    pl.H = [Haa, 0, pl.H[2]];
   }
 
   _predict(t, close, vol, mus) {
@@ -164,8 +158,7 @@ export class Engine {
       const w = this.weights(h);
       let mu = 0;
       for (let e = 0; e < m.length; e++) mu += w[e] * m[e];
-      const pl = this.s.platt[h];
-      const p = sigmoid(pl.a * mu + pl.b);
+      const p = sigmoid(this.s.platt[h].a * mu);
       const q = this.model.resid[h]; // quantiles of standardised residuals at Q_LEVELS
       const scale = vol * Math.sqrt(h);
       const lo = [], hi = [];
@@ -190,7 +183,7 @@ export class Engine {
     for (const h of HORIZONS) {
       o.hedge[h] = { L: s.hedge[h].L.map((x) => r(x, 8)), L0: r(s.hedge[h].L0, 8) };
       o.aci[h] = s.aci[h].map((x) => r(x, 6));
-      o.platt[h] = { a: r(s.platt[h].a), b: r(s.platt[h].b), H: s.platt[h].H.map((x) => r(x)) };
+      o.platt[h] = { a: r(s.platt[h].a), b: 0, H: s.platt[h].H.map((x) => r(x)) };
     }
     o.pending = s.pending.map((p) => p.map((x, k) => (k < 2 ? x : k === P_C ? x : r(x, 7))));
     return o;

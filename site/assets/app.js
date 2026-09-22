@@ -618,7 +618,7 @@ function renderCalibration() {
   if (!st) return;
   $('calibParams').innerHTML = HORIZONS.map((h) => {
     const m80 = Math.exp(st.aci[h][1]);
-    return `<div>${F.horizonLabel(h)} self-correction<b>bands ×${m80.toFixed(2)}</b><b>P(up) slope ${st.platt[h].a.toFixed(2)} · bias ${(st.platt[h].b >= 0 ? '+' : '') + st.platt[h].b.toFixed(3)}</b></div>`;
+    return `<div>${F.horizonLabel(h)} self-correction<b>bands ×${m80.toFixed(2)}</b><b>P(up) slope ${st.platt[h].a.toFixed(2)}</b></div>`;
   }).join('');
 }
 

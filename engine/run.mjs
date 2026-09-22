@@ -60,7 +60,7 @@ function brainSnapshot(eng) {
     o.w[h] = eng.weights(h).map((x) => r(x));
     o.skill[h] = eng.skills(h).map((x) => r(x, 3));
     o.aci[h] = eng.s.aci[h].map((x) => r(x));
-    o.platt[h] = { a: r(eng.s.platt[h].a, 3), b: r(eng.s.platt[h].b) };
+    o.platt[h] = { a: r(eng.s.platt[h].a, 3) };
   }
   return o;
 }

@@ -22,7 +22,7 @@ There is no server. GitHub Actions runs the model every 15 minutes and commits t
 |---|---|---|
 | **Hedge ensemble** | every minute | Each expert's trust weight = exp(−η · its discounted recent error). Experts that forecast well gain influence. |
 | **Adaptive conformal inference** | every minute | Each prediction band widens after a miss and narrows after a hit until it covers exactly 50 / 80 / 95% of outcomes. |
-| **Online logistic calibration** | every minute | Maps the ensemble's signal to an honest P(up), so "55%" really means 55%. |
+| **Online logistic calibration** | every minute | Maps the ensemble's signal to an honest P(up), so "55%" really means 55%. It learns a slope only, with no up/down bias, so calls never simply follow the recent trend. |
 | **Evolution** | daily, 00:00 UTC | Champion vs. challenger tournament over regularisation, training window, feature groups and tree settings, scored walk-forward on the last 5 unseen days. Winners replace champions and every expert is retrained on fresh data. |
 
 ### The experts
@@ -40,7 +40,7 @@ Everything, including the gradient-boosting library, is written from scratch in 
 
 ## The honest part
 
-Short-term crypto prices are close to a random walk. In the launch backtest (14 days, walk-forward) the 5-minute direction accuracy was **52.1%** (z ≈ 2.9 on non-overlapping forecasts, 53.8% on confident calls). The 15- and 60-minute accuracies could not be told apart from a coin flip. The uncertainty bands, on the other hand, were almost exactly calibrated (49.9 / 80.0 / 95.0% coverage). Part of the short-horizon edge comes from market microstructure (bid-ask bounce) that could not be traded profitably after fees.
+Short-term crypto prices are close to a random walk. In the launch backtest (14 days, walk-forward, the full online system) the 5-minute direction accuracy was **52.0%**: z ≈ 3.2 on non-overlapping forecasts, and 53.6% on confident calls. At 15 and 60 minutes the hit rates (51.6% and 53.0%) could not yet be told apart from a coin flip once overlapping forecasts are discounted. Brier skill was small but positive at all three horizons, and the uncertainty bands were almost exactly calibrated (49.9 / 79.9 / 95.0% coverage). Part of the short-horizon edge comes from market microstructure (bid-ask bounce) that could not be traded profitably after fees.
 
 "Getting better every day" means the system keeps re-weighting, re-calibrating and re-evolving itself on fresh data. It does **not** mean accuracy will climb forever: markets change, and the live scoreboard shows whatever actually happens. **This is a public experiment, not financial advice.**
 

@@ -37,7 +37,6 @@ export const ONLINE = {
   plattHalfLifeMin: 5 * DAY_MIN,
   plattPrior: 400, // pseudo-observations anchoring the calibration at start
   plattAMax: 12,
-  plattBMax: 0.06, // cap on learned up/down bias: recent drift is not a signal
 };
 
 // A call counts as "confident" when P(up) is at least this far from 50%.
