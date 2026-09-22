@@ -1,13 +1,13 @@
 {
- "updatedAt": "2026-09-22T01:41:27.376Z",
+ "updatedAt": "2026-09-22T01:43:56.420Z",
  "t": 1790041200000,
  "price": 0.2458,
  "liveSince": "2026-09-22T00:40:00.000Z",
  "model": {
-  "id": "g1-2026-09-22T00:40",
-  "generation": 1,
-  "trainedAt": "2026-09-22T00:40:36.108Z",
-  "dataEnd": 1790037480000
+  "id": "g2-2026-09-22T01:43",
+  "generation": 2,
+  "trainedAt": "2026-09-22T01:43:53.508Z",
+  "dataEnd": 1790041200000
  },
  "experts": [
   "rw",
@@ -18,13 +18,13 @@
   "forest"
  ],
  "run": {
-  "id": "35676684375",
+  "id": "35676692515",
   "sha": "2495a83",
   "host": "https://data-api.binance.vision",
-  "replayed": 51,
-  "retrained": false,
-  "durationMs": 1267,
-  "runs": 5,
+  "replayed": 0,
+  "retrained": true,
+  "durationMs": 121915,
+  "runs": 6,
   "trainError": null
  },
  "months": [
