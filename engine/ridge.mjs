@@ -45,7 +45,8 @@ export function standardizer(X, D, rows, idx) {
  * @param {Int32Array} rows training row indices
  * @param {number[]} idx    feature columns to use
  * @param {Object<string, Float64Array>} Y target arrays indexed by row (already clipped)
- * @param {number} lambda   L2 penalty (intercept penalised too: we never want to learn drift)
+ * @param {number|Object<string, number>} lambda L2 penalty, or one per target key (intercept
+ *                          penalised too: we never want to learn drift)
  */
 export function fitRidge(X, D, rows, idx, Y, lambda) {
   const d = idx.length, m = d + 1;
@@ -74,10 +75,12 @@ export function fitRidge(X, D, rows, idx, Y, lambda) {
     }
   }
   for (let a = 0; a < m; a++) for (let b = 0; b < a; b++) A[b * m + a] = A[a * m + b];
-  for (let a = 0; a < m; a++) A[a * m + a] += lambda;
   const out = {};
   keys.forEach((key, k) => {
-    const w = cholSolve(Float64Array.from(A), B[k], m);
+    const lam = typeof lambda === 'number' ? lambda : lambda[key];
+    const Ak = Float64Array.from(A);
+    for (let a = 0; a < m; a++) Ak[a * m + a] += lam;
+    const w = cholSolve(Ak, B[k], m);
     out[key] = { idx: [...idx], mean: [...mean], std: [...std], w: [...w.subarray(0, d)], b: w[d] };
   });
   return out;

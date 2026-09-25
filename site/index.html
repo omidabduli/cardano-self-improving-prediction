@@ -142,7 +142,7 @@
         <div class="mini-legend" id="weightsLegend"></div>
       </div>
       <div class="panel">
-        <div class="panel-head"><div><h2>Daily evolution</h2><p class="sub">Every day at 00:00 UTC the trainable experts face challengers: mutated versions of themselves. A challenger replaces the champion only if it forecasts the previous five unseen days better.</p></div></div>
+        <div class="panel-head"><div><h2>Daily evolution</h2><p class="sub">Every day at 00:00 UTC the trainable experts face challengers: mutated versions of themselves. A challenger (or the original settings) replaces the champion only if it forecasts the previous ten unseen days clearly and consistently better, so the system doesn't chase noise.</p></div></div>
         <div class="evo-stats" id="evoStats"></div>
         <div class="mini" id="evoChart"></div>
         <div class="mini-legend" id="evoLegend"></div>
@@ -182,7 +182,7 @@
         </div>
         <div class="how-card">
           <h3>3 · Every day: evolve</h3>
-          <p>At 00:00 UTC a GitHub Actions job pulls up to 68 days of 1-minute candles. It runs a champion-vs-challenger tournament over regularisation, training windows, feature sets and tree settings, scored walk-forward on the five most recent days, then retrains every expert on fresh data.</p>
+          <p>At 00:00 UTC a GitHub Actions job pulls up to 73 days of 1-minute candles. It runs a champion-vs-challenger tournament over regularisation, training windows, feature sets and tree settings, scored walk-forward on the ten most recent days. A challenger wins only with a consistent, statistically clear lead. Then every expert is retrained on fresh data, with stronger regularisation for longer horizons, whose overlapping outcomes carry less independent evidence.</p>
         </div>
         <div class="how-card">
           <h3>4 · In public, reproducible</h3>

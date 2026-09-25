@@ -25,7 +25,7 @@ const args = process.argv.slice(2);
 const flag = (f) => args.includes(f);
 const opt = (f, d) => { const i = args.indexOf(f); return i >= 0 ? Number(args[i + 1]) : d; };
 const log = (...a) => console.log(...a);
-const FETCH_DAYS_TRAIN = 68; // 60-day max window + 5 validation days + margin
+const FETCH_DAYS_TRAIN = 73; // 60-day max window + 10 validation days + margin
 const WARMUP_DAYS = opt('--warmup-days', 14);
 // how far back one run can backfill if GitHub didn't run the job for a while
 const REPLAY_DAYS = 7;

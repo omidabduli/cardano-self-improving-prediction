@@ -8,6 +8,7 @@ import { emptyAgg, addResolution, summarize } from '../site/core/metrics.js';
 import { MINUTE, HORIZONS } from '../site/core/config.js';
 import { fitRidge } from '../engine/ridge.mjs';
 import { fitGBDT, mulberry32 } from '../engine/gbdt.mjs';
+import { beats } from '../engine/train.mjs';
 
 // Synthetic market: BTC random walk, ADA follows BTC with a one-minute lag plus noise,
 // prices rounded to the ADA tick like the real thing.
@@ -73,6 +74,12 @@ test('ridge recovers coefficients and inference matches training', () => {
   let err = 0;
   for (let i = 0; i < 100; i++) err = Math.max(err, Math.abs(ridgePredict(m, X, i * Dd) - y[i]));
   assert.ok(err < 0.02, `max error ${err}`);
+
+  // one penalty per target equals fitting each target on its own
+  const both = fitRidge(X, Dd, rows, [0, 2], { a: y, b: y }, { a: 1, b: 1e5 });
+  const b = fitRidge(X, Dd, rows, [0, 2], { b: y }, 1e5).b;
+  assert.deepEqual(both.b.w, b.w);
+  assert.ok(Math.abs(both.b.w[0]) < Math.abs(both.a.w[0]) / 2, 'stronger penalty shrinks more');
 });
 
 test('gradient boosting learns a step and inference equals training traversal', () => {
@@ -166,4 +173,12 @@ test('feature groups cover every feature exactly once', () => {
   assert.equal(all.length, D);
   assert.equal(new Set(all).size, D);
   assert.equal(EXPERTS[0].id, 'rw');
+});
+
+test('evolution promotes only consistent winners', () => {
+  const champ = { score: 0.1, perFold: [0.1, 0.1, 0.1, 0.1, 0.1] };
+  // same average lead: one lucky day vs. a steady edge
+  assert.equal(beats({ score: 0.2, perFold: [0.6, 0, 0, 0, -0.1] }, champ, 0.003), false);
+  assert.equal(beats({ score: 0.2, perFold: [0.2, 0.21, 0.19, 0.2, 0.2] }, champ, 0.003), true);
+  assert.equal(beats({ score: 0.101, perFold: [0.101, 0.101, 0.101, 0.101, 0.101] }, champ, 0.003), false);
 });

@@ -23,7 +23,9 @@ There is no server and no external timer. Your browser runs the model on the liv
 | **Hedge ensemble** | every minute | Each expert's trust weight = exp(−η · its discounted recent error). Experts that forecast well gain influence. |
 | **Adaptive conformal inference** | every minute | Each prediction band widens after a miss and narrows after a hit until it covers exactly 50 / 80 / 95% of outcomes. |
 | **Online logistic calibration** | every minute | Maps the ensemble's signal to an honest P(up), so "55%" really means 55%. It learns a slope only, with no up/down bias, so calls never simply follow the recent trend. |
-| **Evolution** | daily, 00:00 UTC | Champion vs. challenger tournament over regularisation, training window, feature groups and tree settings, scored walk-forward on the last 5 unseen days. Winners replace champions and every expert is retrained on fresh data. |
+| **Evolution** | daily, 00:00 UTC | Champion vs. challenger tournament over regularisation, training window, feature groups and tree settings, scored walk-forward on the last 10 unseen days. A challenger (or the hand-picked generation-0 settings) replaces the champion only if its day-by-day lead is consistent (t ≥ 3, which roughly accounts for trying ~10 challengers). Then every expert is retrained on fresh data. |
+
+Consecutive 60-minute outcomes overlap almost completely, so a training window holds far fewer independent 60-minute results than 5-minute ones. Regularisation therefore scales with the horizon: ridge penalty × h/5, and for the trees a learning rate × √(5/h) and minimum leaf size × h/5.
 
 ### The experts
 

@@ -49,18 +49,29 @@ function clippedTargets(ds, clip) {
   return ds._clip[clip];
 }
 
+// Consecutive h-minute targets overlap, so a window holds only ~1/h as many independent
+// outcomes as rows: longer horizons get proportionally stronger regularisation. Without it
+// the 60-minute models fitted regime noise and scored worse than "no change" out of sample.
+const hScale = (h) => h / HORIZONS[0];
+const ridgeLambdas = (lambda) => Object.fromEntries(HORIZONS.map((h) => [h, lambda * hScale(h)]));
+export const forestParams = (cfg, h) => ({
+  ...cfg,
+  lr: cfg.lr / Math.sqrt(hScale(h)),
+  minLeaf: Math.round(cfg.minLeaf * hScale(h)),
+});
+
 function fitKind(ds, kind, cfg, rows, seed) {
   if (kind === 'linear') {
-    return fitRidge(ds.X, D, rows, featureIndices(cfg.groups), clippedTargets(ds, cfg.clip), cfg.lambda);
+    return fitRidge(ds.X, D, rows, featureIndices(cfg.groups), clippedTargets(ds, cfg.clip), ridgeLambdas(cfg.lambda));
   }
   if (kind === 'forest') {
     const out = {};
     const Y = clippedTargets(ds, cfg.clip);
-    for (const h of HORIZONS) out[h] = fitGBDT(ds.X, D, rows, Y[h], featureIndices(cfg.groups), cfg, seed * 7 + h);
+    for (const h of HORIZONS) out[h] = fitGBDT(ds.X, D, rows, Y[h], featureIndices(cfg.groups), forestParams(cfg, h), seed * 7 + h);
     return out;
   }
   // specialist ridge
-  return fitRidge(ds.X, D, rows, featureIndices(SPECIALIST_GROUPS[kind]), clippedTargets(ds, Z_CLIP), cfg.lambda);
+  return fitRidge(ds.X, D, rows, featureIndices(SPECIALIST_GROUPS[kind]), clippedTargets(ds, Z_CLIP), ridgeLambdas(cfg.lambda));
 }
 
 // Horizon weights for the evolution score: R^2 noise grows ~ sqrt(h), so weight by 1/h.
@@ -120,21 +131,39 @@ export function evaluate(ds, kind, cfg, folds, seed = 1) {
   for (const [s, e] of folds) {
     const m = fitKind(ds, kind, cfg, trainRows(ds, s, cfg.window ?? 30), seed);
     const val = rowsIn(ds, s, e);
-    let fs = 0, fs0 = 0;
+    let fscore = 0;
     for (const h of HORIZONS) {
       const y = Y[h];
+      let fs = 0, fs0 = 0;
       for (const i of val) {
         const z = y[i];
         const err = z - predictKind(kind, m[h], ds.X, i * D);
-        sse[h] += err * err; sse0[h] += z * z; fs += err * err; fs0 += z * z;
+        fs += err * err; fs0 += z * z;
       }
+      sse[h] += fs; sse0[h] += fs0;
+      fscore += H_WEIGHT[h] * (fs0 > 0 ? (1 - fs / fs0) * 100 : 0);
     }
-    perFold.push(fs0 > 0 ? (1 - fs / fs0) * 100 : 0);
+    perFold.push(fscore);
   }
   const perH = {};
   for (const h of HORIZONS) perH[h] = sse0[h] > 0 ? (1 - sse[h] / sse0[h]) * 100 : 0;
   const score = HORIZONS.reduce((a, h) => a + H_WEIGHT[h] * perH[h], 0);
   return { score, perH, perFold };
+}
+
+// A challenger replaces the champion only if it wins by `margin` on average AND consistently:
+// the paired per-day improvement must be at least EVOLVE.minT standard errors above zero.
+// Day-to-day scores are noisy and the best of ~10 challengers always looks good by chance, so
+// the bar is high (t >= 3 over 10 days is roughly 95% confidence after that multiple testing).
+// In a 50-day walk-forward test the old rule (any win on 5 days) promoted on 38 of 50 days
+// and forecast worse than never evolving at all.
+export const EVOLVE = { folds: 10, minT: 3 };
+export function beats(res, champ, margin) {
+  if (!(res.score > champ.score + margin)) return false;
+  const d = res.perFold.map((x, k) => x - champ.perFold[k]);
+  const n = d.length, mean = d.reduce((a, b) => a + b, 0) / n;
+  const sd = Math.sqrt(d.reduce((a, b) => a + (b - mean) ** 2, 0) / (n - 1));
+  return sd > 0 ? mean / (sd / Math.sqrt(n)) >= EVOLVE.minT : mean > 0;
 }
 
 // ---------- evolution ----------
@@ -199,9 +228,10 @@ function tournament(ds, kind, champion, mutate, n, folds, rng, margin, log) {
   // gen0 identical to champion -> reuse
   for (const c of cands) if (!c.res) c.res = cands[0].res;
   const champ = cands[0];
+  // the hand-picked gen0 competes too, so evolution can always return to it
   let best = champ;
-  for (const c of cands) if (c.tag === 'challenger' && c.res.score > best.res.score) best = c;
-  const promoted = best !== champ && best.res.score > champ.res.score + margin;
+  for (const c of cands) if (c !== champ && key(c.cfg) !== key(champion) && c.res.score > best.res.score) best = c;
+  const promoted = best !== champ && beats(best.res, champ.res, margin);
   const winner = promoted ? best : champ;
   log(`  ${kind}: ${cands.length} candidates in ${((Date.now() - t0) / 1000).toFixed(1)}s | champion ${champ.res.score.toFixed(4)} | best challenger ${best === champ ? '-' : best.res.score.toFixed(4)} | gen0 ${cands[1].res.score.toFixed(4)} | ${promoted ? 'PROMOTED' : 'kept'}`);
   return {
@@ -222,7 +252,7 @@ const round4 = (x) => Number(x.toFixed(4));
 /**
  * One generation of evolution: every expert family re-competes on the most recent days.
  */
-export function evolve(ds, prev, { seed, folds = 5, nLinear = 8, nForest = 3, log = console.log }) {
+export function evolve(ds, prev, { seed, folds = EVOLVE.folds, nLinear = 8, nForest = 3, log = console.log }) {
   const rng = mulberry32(seed);
   const F = lastDayFolds(ds, folds);
   const cfg = structuredClone(prev);
@@ -232,13 +262,14 @@ export function evolve(ds, prev, { seed, folds = 5, nLinear = 8, nForest = 3, lo
   report.specialists = {};
   for (const id of Object.keys(SPECIALIST_GROUPS)) {
     const cur = prev.specialists.lambda[id];
-    let bestLam = cur, curScore = null, bestScore = -Infinity;
+    let best = null, curRes = null;
     for (const lam of [...new Set([cur, ...LAMBDA_GRID])]) {
-      const r = evaluate(ds, id, { lambda: lam, window: prev.specialists.window }, F).score;
-      if (lam === cur) curScore = r;
-      if (r > bestScore) { bestScore = r; bestLam = lam; }
+      const r = evaluate(ds, id, { lambda: lam, window: prev.specialists.window }, F);
+      if (lam === cur) curRes = r;
+      if (!best || r.score > best.r.score) best = { lam, r };
     }
-    const promoted = bestLam !== cur && bestScore > curScore + 0.002;
+    const promoted = best.lam !== cur && beats(best.r, curRes, 0.002);
+    const bestLam = best.lam, bestScore = best.r.score, curScore = curRes.score;
     cfg.specialists.lambda[id] = promoted ? bestLam : cur;
     report.specialists[id] = { lambda: cfg.specialists.lambda[id], score: round4(promoted ? bestScore : curScore), promoted };
     log(`  ${id}: lambda ${cfg.specialists.lambda[id]} score ${(promoted ? bestScore : curScore).toFixed(4)}${promoted ? ' (changed)' : ''}`);
