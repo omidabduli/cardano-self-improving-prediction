@@ -233,8 +233,8 @@ function renderPrice() {
 
 const pctText = (r, d = 2) => `${r > 0 ? '+' : r < 0 ? '\u2212' : '\u00b1'}${Math.abs(r * 100).toFixed(d)}%`;
 
-// One forecast box: the expected change in words and colour, the likely range as a small bar,
-// and the chance of going up. Colour is never the only signal: arrows and words say it too.
+// One forecast box: the price estimate, its change in % (colour plus an arrow, so colour is
+// never the only signal) and the 80% range as a small bar.
 function forecastBox(pred, h, t0, tNow) {
   const x = pred.h[h];
   const due = t0 + h * MINUTE;
@@ -244,9 +244,6 @@ function forecastBox(pred, h, t0, tNow) {
   const flat = Math.abs(chg) < 0.00005; // rounds to ±0.00%
   const dir = flat ? 'flat' : chg > 0 ? 'up' : 'down';
   const arrow = flat ? '\u2248' : dir === 'up' ? '\u25b2' : '\u25bc';
-  // how big the expected move is compared with how far the price could go
-  const rel = Math.abs(chg) / Math.max(1e-9, (hiChg - loChg) / 2);
-  const words = rel < 0.05 ? 'About the same as' : `${rel < 0.25 ? 'Slightly ' : ''}${chg > 0 ? 'higher' : 'lower'} than`;
   // range bar: the 80% range, the start price (tick), the live price (ring) and the estimate (dot)
   const live = Number.isFinite(app.price) ? app.price : null;
   const a = Math.min(lo, c, live ?? c), b = Math.max(hi, c, live ?? c), pad = (b - a) * 0.08 || c * 0.001;
@@ -254,7 +251,6 @@ function forecastBox(pred, h, t0, tNow) {
   return `<div class="fc">
     <h3 class="fc-h">In ${H_NAME[h]}</h3>
     <p class="fc-head"><span class="fc-price">${F.price(med, 4)}</span><span class="fc-chg ${dir}">${arrow} ${flat ? '\u00b10.00%' : pctText(chg)}</span></p>
-    <p class="fc-words">${words} ${F.price(c, 4)} at ${F.hhmm(t0)}</p>
     <div class="fc-bar" role="img" aria-label="80% range ${F.price(lo, 4)} to ${F.price(hi, 4)}, estimate ${F.price(med, 4)}">
       <i class="band" style="left:${pos(lo)}%;width:${(pos(hi) - pos(lo)).toFixed(1)}%"></i>
       <i class="now" style="left:${pos(c)}%" title="${F.price(c, 4)} at ${F.hhmm(t0)}"></i>
@@ -284,11 +280,9 @@ function renderForecasts() {
   const t0 = issuedAt(pred.t);
   $('forecasts').innerHTML = HORIZONS.map((h) => forecastBox(pred, h, t0, tNow)).join('');
   const next = issuedAt(pred.t) + CADENCE * MINUTE;
-  const committed = app.status ? F.ago(Date.parse(app.status.updatedAt)) : '—';
   const stale = issuedAt(pred.t) <= tNow - CADENCE * MINUTE;
   $('issueLine').innerHTML = `<span>${stale ? 'Last published forecast, made' : 'Made'} at <b>${F.hhmm(t0)}</b> from ${F.price(pred.c, 4)}</span>`
-    + `<span>Next forecast in <b>${next > tNow ? F.countdown(next - tNow) : 'a moment'}</b></span>`
-    + `<span>Times in your time zone</span><span>Record committed ${committed}</span>`;
+    + `<span>Next forecast in <b>${next > tNow ? F.countdown(next - tNow) : 'a moment'}</b></span>`;
 }
 
 function renderChart() {

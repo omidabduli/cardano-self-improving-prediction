@@ -99,7 +99,6 @@ section.alt{background:var(--surface)}
 .fc-price{font-family:var(--serif);font-weight:300;font-size:clamp(36px,4vw,46px);line-height:1;color:var(--ink);font-variant-numeric:tabular-nums}
 .fc-chg{font-family:var(--mono);font-size:17px;font-weight:500;font-variant-numeric:tabular-nums}
 .fc-wait{font-family:var(--serif);font-size:clamp(28px,3vw,36px);line-height:1;color:var(--muted);font-style:italic}
-.fc-words{margin-top:8px;font-size:14px;color:var(--ink-2)}
 .up{color:var(--up)} .down{color:var(--down)} .flat{color:var(--muted)}
 .fc-bar{position:relative;height:18px;margin-top:16px}
 .fc-bar i{position:absolute;top:50%;display:block}
