@@ -90,6 +90,7 @@ section.alt{background:var(--surface)}
 .fc{padding:28px 24px 28px 0;min-width:0}
 .fc + .fc{padding-left:24px;border-left:1px solid var(--line)}
 .fc-price{display:block;font-family:var(--serif);font-weight:300;font-size:clamp(36px,4.4vw,52px);line-height:1;margin-top:12px;font-variant-numeric:tabular-nums}
+.fc-wait{color:var(--muted);font-style:italic}
 .fc-range{margin-top:10px;font-family:var(--mono);font-size:13px;color:var(--ink-2);font-variant-numeric:tabular-nums}
 .fc-dir{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:14px;font-size:14px;color:var(--ink-2)}
 .fc-due{margin-top:10px;font-size:13px;color:var(--muted)}

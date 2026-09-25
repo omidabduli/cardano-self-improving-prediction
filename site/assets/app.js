@@ -8,7 +8,7 @@ import { computeFeatures, D, WARMUP } from '../core/features.js';
 import { expertPredictions, EXPERTS } from '../core/models.js';
 import { Engine } from '../core/engine.js';
 import { emptyAgg, addResolution, mergeAgg, summarize } from '../core/metrics.js';
-import { fetchKlines, fetchFearGreed, LiveStream, serverClockOffset } from './feed.js';
+import { fetchKlines, fetchFearGreed, fetchPrice, LiveStream, serverClockOffset } from './feed.js';
 import { drawChart } from './chart.js';
 import * as F from './format.js';
 
@@ -240,10 +240,23 @@ function direction(p) {
   return `<span>${word === 'up' ? 'Up' : 'Down'} <b class="mono">${(Math.max(p, 1 - p) * 100).toFixed(1)}%</b></span>${pill}`;
 }
 
+// A forecast is current until the next one is due. An older one is never shown as if it were
+// fresh: while live data loads the boxes say "calculating", and only if live data can't be
+// reached at all is the last published forecast shown, with its time.
 function renderForecasts() {
   const pred = latestPred();
-  if (!pred) { $('forecasts').innerHTML = '<div class="fc"><p class="eyebrow">Waiting for the first forecast…</p></div>'; return; }
-  const tNow = now(), t0 = issuedAt(pred.t);
+  const tNow = now();
+  const current = pred && issuedAt(pred.t) > tNow - CADENCE * MINUTE;
+  if (!current && !(pred && app.marketTried && !app.marketOk)) {
+    $('forecasts').innerHTML = HORIZONS.map((h) => `<div class="fc">
+      <p class="eyebrow">In ${H_NAME[h]}</p>
+      <span class="fc-price fc-wait">calculating…</span>
+      <p class="fc-due">${app.marketTried ? 'Waiting for the next forecast' : 'Reading the live market'}</p>
+    </div>`).join('');
+    $('issueLine').innerHTML = '<span>A new forecast is made at :00, :15, :30 and :45</span>';
+    return;
+  }
+  const t0 = issuedAt(pred.t);
   $('forecasts').innerHTML = HORIZONS.map((h) => {
     const x = pred.h[h];
     const due = t0 + h * MINUTE;
@@ -258,7 +271,8 @@ function renderForecasts() {
   }).join('');
   const next = issuedAt(pred.t) + CADENCE * MINUTE;
   const committed = app.status ? F.ago(Date.parse(app.status.updatedAt)) : '—';
-  $('issueLine').innerHTML = `<span>Made at <b>${F.hhmm(t0)}</b> from ${F.price(pred.c, 4)}</span>`
+  const stale = issuedAt(pred.t) <= tNow - CADENCE * MINUTE;
+  $('issueLine').innerHTML = `<span>${stale ? 'Last published forecast, made' : 'Made'} at <b>${F.hhmm(t0)}</b> from ${F.price(pred.c, 4)}</span>`
     + `<span>Next forecast in <b>${next > tNow ? F.countdown(next - tNow) : 'a moment'}</b></span>`
     + `<span>Times in your time zone</span><span>Record committed ${committed}</span>`;
 }
@@ -450,10 +464,11 @@ async function boot() {
     console.error(e);
     return;
   }
-  // show the published forecast and record straight away; live data refines it when it arrives
-  app.price = [...app.csvClose.entries()].sort((a, b) => a[0] - b[0]).at(-1)?.[1] ?? null;
+  // show the page straight away: the published record, the live price as soon as one tiny
+  // request answers, and the forecast once the browser has caught up with the market
   renderStatic();
   renderMinute();
+  fetchPrice(SYMBOL).then((p) => { app.price ??= p; renderPrice(); renderChart(); }).catch(() => {});
   await startLive();
   setInterval(tick, 1000);
   setInterval(pollStatus, 120_000);

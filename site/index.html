@@ -92,14 +92,17 @@
 
 <section class="block alt" id="method"><div class="wrap">
   <div class="sec-head">
-    <div><p class="eyebrow">Method</p><h2>How it keeps correcting itself</h2></div>
-    <p>Nothing runs on a server. Your browser runs the published model on the live Binance feed. A GitHub job, a few times a day, replays the same minutes with the same code and commits the official record.</p>
+    <div><p class="eyebrow">Method</p><h2>How it predicts, and how it learns</h2></div>
+    <p>In plain words. Nothing runs on a server: your browser does all of this with the published model. A GitHub job replays the same minutes with the same code and saves the official record.</p>
   </div>
   <ol class="steps">
-    <li><span class="yr">01</span><h3>Read the market</h3><p>Minute candles for ADA, Bitcoin and Ethereum, plus the daily crypto Fear &amp; Greed index. The signals cover the last 15 minutes to 3 days.</p></li>
-    <li><span class="yr">02</span><h3>Forecast</h3><p>At :00, :15, :30 and :45 six experts give their view. Their weighted vote becomes the price estimate. The range comes from how much ADA has been moving lately.</p></li>
-    <li><span class="yr">03</span><h3>Learn from every result</h3><p>When a forecast's time comes, it is scored. Experts that were closer gain trust. A range that missed widens, one that held narrows, and the stated probabilities are recalibrated.</p></li>
-    <li><span class="yr">04</span><h3>Evolve once a day</h3><p>At 00:00 UTC mutated settings challenge the current ones on the last ten unseen days. A challenger wins only with a clear, consistent lead. Then every expert is retrained.</p></li>
+    <li><span class="yr">01</span><h3>Look at the market</h3><p>It takes the last three days of minute-by-minute prices for ADA, Bitcoin and Ethereum, plus the daily crypto Fear &amp; Greed index.</p></li>
+    <li><span class="yr">02</span><h3>Turn that into signals</h3><p>About 40 of them, like "ADA rose 2% in the last 6 hours", "Bitcoin just moved but ADA hasn't followed yet" or "the price is near the top of today's range".</p></li>
+    <li><span class="yr">03</span><h3>Ask six experts</h3><p>Each expert reads different signals and guesses the move. One of them, the Skeptic, always says "no change". Their weighted average is the price estimate.</p></li>
+    <li><span class="yr">04</span><h3>Draw the range</h3><p>How far ADA has been moving lately sets the width of the range. If it has swung about 1.5% an hour recently, the 1-hour range is about that wide.</p></li>
+    <li><span class="yr">05</span><h3>Check every forecast</h3><p>When a forecast's time comes, it is compared with the real price. Experts that were closer get more say next time, like listening more to the advisers who were right lately.</p></li>
+    <li><span class="yr">06</span><h3>Correct itself</h3><p>A range that missed gets wider and one that held gets narrower, until it holds 8 times out of 10. If it said "55% up" but such calls came true only half the time, it tones itself down.</p></li>
+    <li><span class="yr">07</span><h3>Retrain every night</h3><p>At midnight UTC every expert is retrained on the latest 60 days. Changed settings then compete with the current ones on the last ten days, and win only if they are clearly and consistently better.</p></li>
   </ol>
 
   <h3 class="sub-h">The experts and how much they are trusted now</h3>
