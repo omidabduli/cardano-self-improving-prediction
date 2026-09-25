@@ -3,205 +3,132 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>ADAptive · Self-Improving Cardano Price Predictor</title>
-  <meta name="description" content="A machine-learning system that predicts the Cardano (ADA) price 5, 15 and 60 minutes ahead, scores every prediction in public, and retrains itself every day. Runs entirely on GitHub Actions and GitHub Pages.">
-  <meta property="og:title" content="ADAptive · Self-Improving Cardano Price Predictor">
-  <meta property="og:description" content="Live ADA forecasts with honest, public scoring. The model re-weights its experts every minute and evolves every day.">
+  <title>ADAptive · Cardano price forecast, checked in public</title>
+  <meta name="description" content="Where the Cardano (ADA) price is likely to be in 1 hour, 3 hours and 24 hours, with an honest range. A new forecast every 15 minutes; every forecast is logged and checked in public.">
+  <meta property="og:title" content="ADAptive · Cardano price forecast, checked in public">
+  <meta property="og:description" content="ADA in 1 hour, 3 hours and 24 hours: a price estimate and a range, renewed every 15 minutes and scored in public.">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="ADAptive">
   <meta property="og:url" content="https://omidabduli.github.io/cardano-self-improving-prediction/">
   <meta property="og:image" content="https://omidabduli.github.io/cardano-self-improving-prediction/assets/og.jpg">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="ADAptive: live Cardano price forecasts from a self-improving model, scored in public">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="ADAptive · Self-Improving Cardano Price Predictor">
-  <meta name="twitter:description" content="Live ADA forecasts every minute. Every call is checked in public, and the model evolves daily.">
-  <meta name="twitter:image" content="https://omidabduli.github.io/cardano-self-improving-prediction/assets/og.jpg">
   <link rel="canonical" href="https://omidabduli.github.io/cardano-self-improving-prediction/">
-  <meta name="theme-color" content="#05070d">
-  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#FAF9F5" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1C1B19" media="(prefers-color-scheme: dark)">
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="preconnect" href="https://data-api.binance.vision" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300..600;1,6..72,300..500&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
   <link rel="stylesheet" href="assets/style.css">
 </head>
 <body>
-  <div class="backdrop" aria-hidden="true"></div>
+<nav class="nav" aria-label="Main"><div class="wrap">
+  <a class="brand" href="#top">ADAptive</a>
+  <ul>
+    <li><a href="#chart">Chart</a></li>
+    <li><a href="#record">Record</a></li>
+    <li><a href="#method">Method</a></li>
+    <li><a class="btn primary nav-btn" id="ghLink" href="https://github.com/omidabduli/cardano-self-improving-prediction">GitHub</a></li>
+  </ul>
+</div></nav>
 
-  <header class="topbar">
-    <a class="brand" href="#top" aria-label="ADAptive home">
-      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
-        <defs>
-          <linearGradient id="bm" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5b8cff"/><stop offset="1" stop-color="#2ee6c5"/></linearGradient>
-        </defs>
-        <path d="M3 21 L11 17 L16 19 L19 15" fill="none" stroke="url(#bm)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
-        <path d="M19 15 L29 7 L29 25 Z" fill="url(#bm)" opacity=".35"/>
-        <path d="M19 15 L29 11 L29 20 Z" fill="url(#bm)" opacity=".6"/>
-        <circle cx="19" cy="15" r="2.6" fill="#fff"/>
-      </svg>
-      <span class="brand-name"><b>ADA</b>ptive</span>
-    </a>
-    <nav class="nav">
-      <a href="#forecast">Forecast</a>
-      <a href="#scoreboard">Scoreboard</a>
-      <a href="#brain">Brain</a>
-      <a href="#how">How it works</a>
-    </nav>
-    <div class="top-right">
-      <span class="live-pill" id="livePill"><i></i><span id="liveText">connecting</span></span>
-      <a class="gh" id="ghLink" href="#" target="_blank" rel="noopener" aria-label="Source on GitHub">
-        <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
-        <span>Source</span>
-      </a>
+<header class="hero" id="top"><div class="wrap">
+  <p class="eyebrow">ADA / USDT · live from Binance · <span id="liveState" class="live">connecting</span></p>
+  <h1>Where Cardano is <em>likely</em> to trade next.</h1>
+  <p class="lede">Every 15 minutes a small self-correcting model estimates the ADA price 1 hour, 3 hours and 24 hours ahead, with a range it expects to hold 8 times out of 10. Every forecast is logged, then checked in public.</p>
+
+  <div class="now">
+    <span class="now-price" id="price">—</span>
+    <span class="now-meta"><span id="chg24">—</span> in 24 h</span>
+  </div>
+
+  <div class="forecasts" id="forecasts" aria-live="polite">
+    <div class="fc"><p class="eyebrow">Loading the model…</p></div>
+  </div>
+  <p class="facts" id="issueLine">&nbsp;</p>
+  <p class="banner" id="banner" hidden></p>
+</div></header>
+
+<section class="block alt" id="chart"><div class="wrap">
+  <div class="sec-head">
+    <div><p class="eyebrow">Chart</p><h2>The last day, and the range ahead</h2></div>
+    <p>The dark line is the price. The shaded band is where the 1-hour forecasts expected it to be, drawn at the moment each one was checked. On the right: the current 1-hour, 3-hour and 24-hour ranges.</p>
+  </div>
+  <figure class="figure">
+    <svg id="chartSvg" class="chart" role="img" aria-label="ADA price over the last 24 hours with forecast ranges"></svg>
+    <figcaption class="legend">
+      <span><i class="k k-price"></i>Price</span>
+      <span><i class="k k-band"></i>80% range forecast one hour earlier</span>
+      <span><i class="k k-now"></i>Current forecast, median and 80% range</span>
+    </figcaption>
+  </figure>
+</div></section>
+
+<section class="block" id="record"><div class="wrap">
+  <div class="sec-head">
+    <div><p class="eyebrow">Record · <span id="liveSince">live</span></p><h2>How good it <em>really</em> is</h2></div>
+    <p>Direction counts only forecasts that don't overlap (one per hour, one per 3 hours, one per day), so a single lucky move isn't counted many times. 50% is a coin flip. The range should hold close to 80% of the time.</p>
+  </div>
+  <div class="table-wrap">
+    <table class="scores" id="scores">
+      <thead><tr><th>Horizon</th><th>Direction right</th><th>Range held (aim 80%)</th><th>Typical miss</th><th>Forecasts checked</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <p class="note" id="recordNote"></p>
+
+  <h3 class="sub-h">Latest checked forecasts</h3>
+  <div class="table-wrap">
+    <table class="log" id="log">
+      <thead><tr><th>Made</th><th>For</th><th>Forecast</th><th>80% range</th><th>Actual</th><th>Result</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <p class="note">All forecasts: <a id="csvLink" href="#">CSV files on GitHub</a>, one row every 15 minutes.</p>
+</div></section>
+
+<section class="block alt" id="method"><div class="wrap">
+  <div class="sec-head">
+    <div><p class="eyebrow">Method</p><h2>How it keeps correcting itself</h2></div>
+    <p>Nothing runs on a server. Your browser runs the published model on the live Binance feed. A GitHub job, a few times a day, replays the same minutes with the same code and commits the official record.</p>
+  </div>
+  <ol class="steps">
+    <li><span class="yr">01</span><h3>Read the market</h3><p>Minute candles for ADA, Bitcoin and Ethereum, plus the daily crypto Fear &amp; Greed index. The signals cover the last 15 minutes to 3 days.</p></li>
+    <li><span class="yr">02</span><h3>Forecast</h3><p>At :00, :15, :30 and :45 six experts give their view. Their weighted vote becomes the price estimate. The range comes from how much ADA has been moving lately.</p></li>
+    <li><span class="yr">03</span><h3>Learn from every result</h3><p>When a forecast's time comes, it is scored. Experts that were closer gain trust. A range that missed widens, one that held narrows, and the stated probabilities are recalibrated.</p></li>
+    <li><span class="yr">04</span><h3>Evolve once a day</h3><p>At 00:00 UTC mutated settings challenge the current ones on the last ten unseen days. A challenger wins only with a clear, consistent lead. Then every expert is retrained.</p></li>
+  </ol>
+
+  <h3 class="sub-h">The experts and how much they are trusted now</h3>
+  <div class="table-wrap">
+    <table class="council" id="council">
+      <thead><tr><th>Expert</th><th>Reads</th><th>Trust · 1 h</th><th>Trust · 3 h</th><th>Trust · 24 h</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <p class="note" id="evoNote"></p>
+</div></section>
+
+<section class="block"><div class="wrap">
+  <div class="closing">
+    <div>
+      <p class="eyebrow">An honest limit</p>
+      <h2>Can it get close to 100%? No.</h2>
     </div>
-  </header>
+    <div class="closing-text">
+      <p>Nobody can reliably call the direction of a liquid market hours ahead. In a 300-day test, every combination of signals we tried called the direction between 48% and 54% of the time: noise around a coin flip. What can be forecast honestly is how far the price is likely to move. That is what the range shows, and it is checked every day.</p>
+      <p>If a real edge appears, the ensemble and the daily evolution are built to find it, and the record above will show it. This is a public experiment, not financial advice.</p>
+    </div>
+  </div>
+</div></section>
 
-  <main id="top">
-    <section class="hero">
-      <div class="hero-left">
-        <div class="eyebrow">Self-improving machine learning · scored in public</div>
-        <h1 class="headline">Where will <span class="ada">Cardano</span> be in <span id="headH">5 minutes</span>?</h1>
-        <div class="price-row">
-          <div class="pair"><span class="coin">ADA</span><span class="slash">/</span><span>USDT</span></div>
-          <div class="price" id="price" aria-live="off">—</div>
-          <div class="chg" id="chg24">—</div>
-        </div>
-        <p class="lede">A council of six models forecasts ADA every minute. Every forecast is written down before the outcome is known and then scored, publicly. The council re-weights itself after every result and evolves its own settings every day.</p>
-        <div class="meta-row">
-          <div class="meta"><span>Next forecast</span><b id="nextTick">—</b></div>
-          <div class="meta"><span>Model</span><b id="genBadge">—</b></div>
-          <div class="meta"><span>Live since</span><b id="liveSince">—</b></div>
-          <div class="meta"><span>Forecasts made</span><b id="madeCount">—</b></div>
-        </div>
-      </div>
-      <div class="hero-right" id="forecastCards" aria-label="Current forecasts"></div>
-    </section>
+<footer><div class="wrap">
+  ADAptive · MIT licence · market data from Binance, sentiment from alternative.me · not affiliated with Cardano or Binance · not financial advice
+</div></footer>
 
-    <div class="banner" id="banner" hidden></div>
-
-    <section class="panel chart-panel" id="forecast">
-      <div class="panel-head">
-        <div>
-          <h2>Live forecast</h2>
-          <p class="sub" id="chartSub">The shaded fan is the forecast for the next hour. The band behind the price shows what the model predicted <b id="corrH">5 minutes</b> earlier for each moment: the price should stay inside it about 80% of the time.</p>
-        </div>
-        <div class="controls">
-          <div class="seg" id="hSeg" role="tablist" aria-label="Forecast horizon">
-            <button data-h="5" class="on">5m</button><button data-h="15">15m</button><button data-h="60">1h</button>
-          </div>
-          <div class="seg" id="rSeg" role="tablist" aria-label="Time range">
-            <button data-r="60">1H</button><button data-r="180" class="on">3H</button><button data-r="720">12H</button><button data-r="1440">24H</button>
-          </div>
-        </div>
-      </div>
-      <div class="chart-wrap" id="chartWrap">
-        <canvas id="chart"></canvas>
-        <div class="now-dot" id="nowDot"><i></i></div>
-        <div class="tip" id="tip" hidden></div>
-        <div class="chart-loading" id="chartLoading"><span class="spinner"></span>Loading market data and replaying the model…</div>
-      </div>
-      <div class="strip-row">
-        <span class="strip-label" title="Each cell is one forecast, placed at the moment it was checked">Results</span>
-        <canvas id="strip"></canvas>
-      </div>
-      <div class="legend">
-        <span><i class="lg lg-price"></i>ADA price</span>
-        <span><i class="lg lg-corr"></i>80% band predicted earlier</span>
-        <span><i class="lg lg-fan"></i>Forecast fan (50 / 80 / 95%)</span>
-        <span><i class="lg lg-hit"></i>Correct direction</span>
-        <span><i class="lg lg-miss"></i>Wrong direction</span>
-        <span><i class="lg lg-tie"></i>No price change</span>
-      </div>
-    </section>
-
-    <section class="grid two" id="scoreboard">
-      <div class="panel">
-        <div class="panel-head"><div><h2>Scoreboard</h2><p class="sub">How often it gets the direction right, and whether its uncertainty bands can be trusted. A coin flip scores 50%.</p></div></div>
-        <div class="score-table" id="scoreTable"></div>
-        <p class="record-note" id="recordNote"></p>
-        <div class="session" id="session"></div>
-      </div>
-      <div class="panel feed-panel">
-        <div class="panel-head"><div><h2>Live verification</h2><p class="sub">Forecasts being checked as their time comes. Newest first.</p></div></div>
-        <ol class="feed" id="feed"></ol>
-      </div>
-    </section>
-
-    <section class="grid two" id="brain">
-      <div class="panel">
-        <div class="panel-head">
-          <div><h2>The council</h2><p class="sub">Six experts vote on every forecast. Each one's influence rises when its recent forecasts beat the others' and falls when they don't. This happens every minute.</p></div>
-          <div class="seg small" id="cSeg"><button data-h="5" class="on">5m</button><button data-h="15">15m</button><button data-h="60">1h</button></div>
-        </div>
-        <div class="council" id="council"></div>
-        <div class="mini-title">How trust has shifted over time</div>
-        <div class="mini" id="weightsChart"></div>
-        <div class="mini-legend" id="weightsLegend"></div>
-      </div>
-      <div class="panel">
-        <div class="panel-head"><div><h2>Daily evolution</h2><p class="sub">Every day at 00:00 UTC the trainable experts face challengers: mutated versions of themselves. A challenger (or the original settings) replaces the champion only if it forecasts the previous ten unseen days clearly and consistently better, so the system doesn't chase noise.</p></div></div>
-        <div class="evo-stats" id="evoStats"></div>
-        <div class="mini" id="evoChart"></div>
-        <div class="mini-legend" id="evoLegend"></div>
-        <ol class="evo-log" id="evoLog"></ol>
-      </div>
-    </section>
-
-    <section class="grid two">
-      <div class="panel">
-        <div class="panel-head">
-          <div><h2>Learning curve</h2><p class="sub">Direction accuracy per day. Dotted: the launch backtest (simulated). Solid: live, scored in public.</p></div>
-          <div class="seg small" id="lSeg"><button data-h="5" class="on">5m</button><button data-h="15">15m</button><button data-h="60">1h</button></div>
-        </div>
-        <div class="mini tall" id="learnChart"></div>
-        <div class="mini-title">80% band coverage per day (target: 80%)</div>
-        <div class="mini" id="covChart"></div>
-      </div>
-      <div class="panel">
-        <div class="panel-head"><div><h2>Calibration</h2><p class="sub">When it says 55% up, is it up about 55% of the time? Points on the diagonal mean honest probabilities.</p></div></div>
-        <div class="mini tall" id="calChart"></div>
-        <div class="mini-legend" id="calLegend"></div>
-        <div class="calib-params" id="calibParams"></div>
-      </div>
-    </section>
-
-    <section class="panel how" id="how">
-      <div class="panel-head"><div><h2>How it works</h2><p class="sub">No server, no API keys, no database: GitHub runs the model and the result is this static page.</p></div></div>
-      <div class="how-diagram" id="howDiagram"></div>
-      <div class="how-grid">
-        <div class="how-card">
-          <h3>1 · Every minute: forecast</h3>
-          <p>36 signals are computed from the last four hours of ADA and Bitcoin trading: buy/sell pressure, bid-ask bounce, Bitcoin lead-lag, momentum, range position, volume and time of day. Six experts turn them into forecasts for 5, 15 and 60 minutes ahead, and the council combines those into a probability and a fan of prediction bands.</p>
-        </div>
-        <div class="how-card">
-          <h3>2 · Every minute: learn</h3>
-          <p>When a forecast's time comes it is scored. Three online learners update straight away. <b>Hedge</b> shifts trust toward the experts with the smallest recent errors. <b>Adaptive conformal inference</b> widens a band after misses and narrows it after hits until it holds its promised coverage. <b>Online logistic calibration</b> keeps the stated probabilities honest.</p>
-        </div>
-        <div class="how-card">
-          <h3>3 · Every day: evolve</h3>
-          <p>At 00:00 UTC a GitHub Actions job pulls up to 73 days of 1-minute candles. It runs a champion-vs-challenger tournament over regularisation, training windows, feature sets and tree settings, scored walk-forward on the ten most recent days. A challenger wins only with a consistent, statistically clear lead. Then every expert is retrained on fresh data, with stronger regularisation for longer horizons, whose overlapping outcomes carry less independent evidence.</p>
-        </div>
-        <div class="how-card">
-          <h3>4 · In public, reproducible</h3>
-          <p>A few times a day, whenever GitHub's scheduler gets to it, the pipeline replays every minute since its last run with the published model, logs each forecast and its result to <a id="csvLink" href="#" target="_blank" rel="noopener">CSV files</a> and commits them to git. Your browser runs <em>the same code</em> on the live Binance stream from that checkpoint, so everything on this page, scores included, is complete up to the current minute and matches what gets recorded.</p>
-        </div>
-      </div>
-      <div class="honest">
-        <h3>The honest part</h3>
-        <p>Short-term crypto prices are close to a random walk. The best academic and competition models are right only slightly more than half the time over a few minutes, and this one is no exception: expect roughly 51–53% at five minutes and close to a coin flip at an hour. Two things it can do reliably are to say <em>how uncertain</em> the next hour is (the bands) and to know when it has <em>no</em> edge. The z-score on the scoreboard uses only non-overlapping forecasts, so a lucky streak can't pass as skill. Part of the short-horizon edge comes from market microstructure (bid-ask bounce) that you couldn't trade profitably after fees. <b>This is a public experiment, not financial advice.</b></p>
-      </div>
-      <div class="model-card" id="modelCard"></div>
-    </section>
-  </main>
-
-  <footer class="footer">
-    <div>ADAptive: an open-source experiment. Not affiliated with Cardano, IOG, the Cardano Foundation, EMURGO or Binance. Market data from Binance's public API. Not financial advice.</div>
-    <div class="foot-links"><a id="repoLink" href="#" target="_blank" rel="noopener">Source code</a> · <a id="dataLink" href="#" target="_blank" rel="noopener">Raw data</a> · <a id="actionsLink" href="#" target="_blank" rel="noopener">Pipeline runs</a> · <span id="lastUpdate">—</span></div>
-  </footer>
-
-  <script type="module" src="assets/app.js"></script>
+<script type="module" src="assets/app.js"></script>
 </body>
 </html>

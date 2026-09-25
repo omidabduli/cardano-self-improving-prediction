@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { HORIZONS } from '../site/core/config.js';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const DATA = path.join(ROOT, 'data');
@@ -22,7 +23,8 @@ export function writeJSON(rel, obj, pretty = false) {
 export const isoDay = (ms) => new Date(ms).toISOString().slice(0, 10);
 export const isoMinute = (ms) => new Date(ms).toISOString().slice(0, 16);
 
-export const CSV_HEADER = 'time,close,ret5,p5,lo5,hi5,ret15,p15,lo15,hi15,ret60,p60,lo60,hi60';
+// per horizon h (minutes): predicted log-return (bp), P(up), 80% band low/high (bp)
+export const CSV_HEADER = ['time', 'close', ...HORIZONS.flatMap((h) => [`ret${h}`, `p${h}`, `lo${h}`, `hi${h}`])].join(',');
 
 // Append rows (already formatted, one per minute, sorted) to per-day CSV files, skipping
 // minutes that are already recorded so re-runs are idempotent.

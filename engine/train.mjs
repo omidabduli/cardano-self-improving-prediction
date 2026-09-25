@@ -1,6 +1,6 @@
 // Training, walk-forward validation, daily evolution and warm-up simulation.
 
-import { HORIZONS, MAX_H, Z_CLIP, DAY_MIN, Q_LEVELS } from '../site/core/config.js';
+import { HORIZONS, MAX_H, Z_CLIP, DAY_MIN, Q_LEVELS, isIssue } from '../site/core/config.js';
 import { computeFeatures, targets, featureIndices, GROUP_NAMES, WARMUP, D, FEATURES } from '../site/core/features.js';
 import { EXPERTS, ridgePredict, gbdtPredict, expertPredictions } from '../site/core/models.js';
 import { Engine, freshState } from '../site/core/engine.js';
@@ -8,19 +8,24 @@ import { emptyHorizonAggs, addResolution } from '../site/core/metrics.js';
 import { fitRidge } from './ridge.mjs';
 import { fitGBDT, compactForest, mulberry32 } from './gbdt.mjs';
 
-export const SPECIALIST_GROUPS = { micro: ['micro'], btc: ['btc'], swing: ['trend', 'range'] };
-export const WINDOWS = [7, 10, 14, 21, 30, 45, 60];
-export const LAMBDA_GRID = [1e3, 3e3, 1e4, 3e4, 1e5, 3e5, 1e6];
+export const SPECIALIST_GROUPS = { swing: ['trend', 'range'], btc: ['btc', 'eth'], crowd: ['flow', 'activity', 'sentiment'] };
+// Training uses every ROW_STEP-th minute: neighbouring rows of 1-24 h targets are near-copies.
+export const ROW_STEP = 5;
+export const WINDOWS = [14, 21, 30, 45, 60];
+export const LAMBDA_GRID = [1e4, 3e4, 1e5, 3e5, 1e6, 3e6, 1e7];
 
-// Generation 0: sensible hand-picked starting point. Evolution takes it from here.
+// Generation 0: the best of the configurations compared in a 300-day walk-forward test of the
+// 1 h / 3 h / 24 h system. Strong shrinkage; price-based signals only for the two brains
+// (order flow, activity, time and sentiment only added noise). Evolution takes it from here.
+const PRICE_GROUPS = ['trend', 'btc', 'eth', 'range'];
 export const GEN0 = {
-  specialists: { lambda: { micro: 1e4, btc: 1e4, swing: 1e4 }, window: 30 },
-  linear: { lambda: 3e4, window: 30, groups: [...GROUP_NAMES], clip: 4 },
-  forest: { trees: 100, depth: 3, lr: 0.05, minLeaf: 1000, subsample: 0.5, colsample: 0.8, l2: 10, window: 30, groups: [...GROUP_NAMES], clip: 4 },
+  specialists: { lambda: { swing: 3e5, btc: 3e5, crowd: 3e5 }, window: 60 },
+  linear: { lambda: 3e5, window: 60, groups: PRICE_GROUPS, clip: 4 },
+  forest: { trees: 40, depth: 2, lr: 0.02, minLeaf: 800, subsample: 0.5, colsample: 0.6, l2: 200, window: 60, groups: PRICE_GROUPS, clip: 4 },
 };
 
 export function makeDataset(S) {
-  const { X, vol } = computeFeatures(S);
+  const { X, vol } = computeFeatures(S, WARMUP, ROW_STEP);
   const Z = {};
   for (const h of HORIZONS) Z[h] = targets(S, vol, h);
   return { S, X, vol, Z, n: S.t.length, _clip: {} };
@@ -30,7 +35,7 @@ export function makeDataset(S) {
 export function rowsIn(ds, a, b) {
   const out = [];
   const lo = Math.max(a, WARMUP), hi = Math.min(b, ds.n - MAX_H);
-  for (let i = lo; i < hi; i++) if (Number.isFinite(ds.vol[i]) && !ds.S.syn[i]) out.push(i);
+  for (let i = lo; i < hi; i++) if (Number.isFinite(ds.vol[i]) && !ds.S.syn[i]) out.push(i); // vol is NaN off-stride
   return Int32Array.from(out);
 }
 
@@ -51,13 +56,14 @@ function clippedTargets(ds, clip) {
 
 // Consecutive h-minute targets overlap, so a window holds only ~1/h as many independent
 // outcomes as rows: longer horizons get proportionally stronger regularisation. Without it
-// the 60-minute models fitted regime noise and scored worse than "no change" out of sample.
+// the long-horizon models fitted regime noise and scored worse than "no change" out of sample.
 const hScale = (h) => h / HORIZONS[0];
 const ridgeLambdas = (lambda) => Object.fromEntries(HORIZONS.map((h) => [h, lambda * hScale(h)]));
-export const forestParams = (cfg, h) => ({
+export const forestParams = (cfg, h, nRows = Infinity) => ({
   ...cfg,
   lr: cfg.lr / Math.sqrt(hScale(h)),
-  minLeaf: Math.round(cfg.minLeaf * hScale(h)),
+  // never so large that no split fits: a split-less tree would only learn the window's drift
+  minLeaf: Math.max(50, Math.min(Math.round(cfg.minLeaf * hScale(h)), Math.floor((nRows * cfg.subsample) / 8))),
 });
 
 function fitKind(ds, kind, cfg, rows, seed) {
@@ -67,7 +73,15 @@ function fitKind(ds, kind, cfg, rows, seed) {
   if (kind === 'forest') {
     const out = {};
     const Y = clippedTargets(ds, cfg.clip);
-    for (const h of HORIZONS) out[h] = fitGBDT(ds.X, D, rows, Y[h], featureIndices(cfg.groups), forestParams(cfg, h), seed * 7 + h);
+    for (const h of HORIZONS) {
+      // centre the target on the window's mean: trees learn patterns, not the recent drift
+      let m = 0;
+      for (const i of rows) m += Y[h][i];
+      m /= rows.length || 1;
+      const yc = new Float64Array(Y[h].length);
+      for (const i of rows) yc[i] = Y[h][i] - m;
+      out[h] = fitGBDT(ds.X, D, rows, yc, featureIndices(cfg.groups), forestParams(cfg, h, rows.length), seed * 7 + h);
+    }
     return out;
   }
   // specialist ridge
@@ -94,17 +108,18 @@ export function fitExperts(ds, s, cfg, seed = 1) {
   });
 }
 
-// Empirical quantiles of the standardised return at Q_LEVELS (the band shapes).
+// Empirical quantiles of the standardised return at Q_LEVELS (the band shapes), centred on
+// the median: the window's drift must not move the price estimate (it made the 24 h estimate
+// worse than "no change"), only the experts may.
 export function residQuantiles(ds, rows) {
   const out = {};
   for (const h of HORIZONS) {
     const v = [];
     for (const i of rows) { const z = ds.Z[h][i]; if (Number.isFinite(z)) v.push(z); }
     v.sort((a, b) => a - b);
-    out[h] = Q_LEVELS.map((q) => {
-      const pos = q * (v.length - 1), lo = Math.floor(pos), hi = Math.ceil(pos);
-      return Number((v[lo] + (v[hi] - v[lo]) * (pos - lo)).toPrecision(6));
-    });
+    const q = (p) => { const pos = p * (v.length - 1), lo = Math.floor(pos), hi = Math.ceil(pos); return v[lo] + (v[hi] - v[lo]) * (pos - lo); };
+    const med = q(0.5);
+    out[h] = Q_LEVELS.map((p) => Number((q(p) - med).toPrecision(6)));
   }
   return out;
 }
@@ -287,7 +302,7 @@ export function evolve(ds, prev, { seed, folds = EVOLVE.folds, nLinear = 8, nFor
 export function buildModel(ds, cfg, meta) {
   const s = ds.n; // first minute this model will predict is the one after the data
   const experts = fitExperts(ds, s, cfg, meta.seed || 1);
-  const resid = residQuantiles(ds, trainRows(ds, s, 14));
+  const resid = residQuantiles(ds, trainRows(ds, s, 30));
   return {
     v: 1,
     id: meta.id,
@@ -324,15 +339,15 @@ export function warmup(ds, cfg, days, { log = console.log, seed = 1 } = {}) {
   const s0 = ds.n - days * DAY_MIN;
   const eng = new Engine({ experts: ids.map((id) => ({ id })), resid: null }, freshState(ids, ds.S.t[s0 - 1]));
   const byDay = {};
-  const pAbs = { 5: [], 15: [], 60: [] };
+  const pAbs = Object.fromEntries(HORIZONS.map((h) => [h, []]));
   for (let d = 0; d < days; d++) {
     const s = s0 + d * DAY_MIN, e = d === days - 1 ? ds.n : s + DAY_MIN;
     const t0 = Date.now();
     const experts = fitExperts(ds, s, cfg, seed + d);
-    const model = { experts: experts.map(roundExpert), resid: residQuantiles(ds, trainRows(ds, s, 14)) };
+    const model = { experts: experts.map(roundExpert), resid: residQuantiles(ds, trainRows(ds, s, 30)) };
     eng.model = model;
     for (let i = s; i < e; i++) {
-      const mus = expertPredictions(model, ds.X, D, i);
+      const mus = isIssue(ds.S.t[i]) ? expertPredictions(model, ds.X, D, i) : null;
       const { resolved, pred } = eng.step(ds.S.t[i], ds.S.c[i], ds.vol[i], mus);
       if (pred) for (const h of HORIZONS) pAbs[h].push(Math.abs(pred.h[h].p - 0.5));
       for (const r of resolved) {

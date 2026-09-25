@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildSeries, indexOf } from '../site/core/candles.js';
-import { computeFeatures, D, WARMUP, FEATURES, featureIndices } from '../site/core/features.js';
+import { buildSeries, indexOf, FNG_LAG } from '../site/core/candles.js';
+import { computeFeatures, D, WARMUP, FEATURES, featureIndices, GROUP_NAMES } from '../site/core/features.js';
 import { ridgePredict, gbdtPredict, expertPredictions, EXPERTS } from '../site/core/models.js';
 import { Engine, freshState } from '../site/core/engine.js';
 import { emptyAgg, addResolution, summarize } from '../site/core/metrics.js';
-import { MINUTE, HORIZONS } from '../site/core/config.js';
+import { MINUTE, HORIZONS, CADENCE, isIssue } from '../site/core/config.js';
 import { fitRidge } from '../engine/ridge.mjs';
 import { fitGBDT, mulberry32 } from '../engine/gbdt.mjs';
 import { beats } from '../engine/train.mjs';
@@ -43,11 +43,21 @@ test('series is gap-free and fills missing minutes flat', () => {
   assert.equal(indexOf(S, ada[20].t), 20);
 });
 
+// A daily sentiment series stamped at 00:00 UTC, like the Fear & Greed index.
+const fngSeries = (ada) => {
+  const out = [];
+  for (let t = Math.floor(ada[0].t / 86400000) * 86400000; t <= ada.at(-1).t; t += 86400000) out.push({ t, v: 20 + ((t / 86400000) % 7) * 10 });
+  return out;
+};
+
 test('features are strictly causal (no lookahead)', () => {
-  const { ada, btc } = synthCandles(800);
-  const full = buildSeries(ada, btc, ada[799].t);
-  const cut = 600;
-  const part = buildSeries(ada.slice(0, cut), btc.slice(0, cut), ada[cut - 1].t);
+  const { ada, btc } = synthCandles(5500);
+  const eth = btc.map((k) => ({ ...k, c: k.c / 20 }));
+  const fng = fngSeries(ada);
+  const full = buildSeries(ada, btc, ada[5499].t, { eth, fng });
+  const cut = 5000;
+  // the shorter history also lacks every sentiment value published after the cut
+  const part = buildSeries(ada.slice(0, cut), btc.slice(0, cut), ada[cut - 1].t, { eth: eth.slice(0, cut), fng: fng.filter((x) => x.t + FNG_LAG <= ada[cut - 1].t + MINUTE) });
   const F1 = computeFeatures(full), F2 = computeFeatures(part);
   for (let i = WARMUP; i < cut; i++) {
     for (let j = 0; j < D; j++) {
@@ -56,8 +66,26 @@ test('features are strictly causal (no lookahead)', () => {
     }
     assert.equal(F1.vol[i], F2.vol[i]);
   }
-  for (let j = 0; j < D; j++) assert.ok(Number.isFinite(F1.X[700 * D + j]), `feature ${FEATURES[j]} finite`);
+  for (let j = 0; j < D; j++) assert.ok(Number.isFinite(F1.X[5200 * D + j]), `feature ${FEATURES[j]} finite`);
   assert.ok(Number.isNaN(F1.X[(WARMUP - 1) * D]));
+  // a strided computation gives the same rows on every issue minute
+  const F3 = computeFeatures(full, WARMUP, CADENCE);
+  let checked = 0;
+  for (let i = WARMUP; i < 5500; i++) {
+    if (!isIssue(full.t[i])) { assert.ok(Number.isNaN(F3.vol[i])); continue; }
+    checked++;
+    for (let j = 0; j < D; j++) assert.equal(F3.X[i * D + j], F1.X[i * D + j]);
+  }
+  assert.ok(checked > 50);
+});
+
+test('a sentiment value counts only from the minute it was public', () => {
+  const { ada, btc } = synthCandles(3000);
+  const day = Math.ceil(ada[0].t / 86400000) * 86400000;
+  const S = buildSeries(ada, btc, ada.at(-1).t, { fng: [{ t: day - 86400000, v: 10 }, { t: day, v: 90 }] });
+  const k = indexOf(S, day + FNG_LAG - MINUTE); // this candle closes exactly FNG_LAG after the stamp
+  assert.equal(S.fg[k - 1], 10);
+  assert.equal(S.fg[k], 90);
 });
 
 test('ridge recovers coefficients and inference matches training', () => {
@@ -116,28 +144,28 @@ test('engine: hedge trusts the informative expert, conformal bands hit their cov
   const g = () => { const u = Math.max(rng(), 1e-12); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rng()); };
   const model = toyModel();
   const eng = new Engine(model, freshState(['rw', 'good', 'bad'], 0));
-  const n = 30000, vol = 0.001;
-  // price path where the 5-minute future return has a predictable component `sig`
-  const sig = new Float64Array(n + 100), price = new Float64Array(n + 100);
+  const n = 120000, vol = 0.001, H = HORIZONS[0];
+  // price path with a slowly drifting, persistent trend `a`: the next hour is partly predictable
+  const a = new Float64Array(n + 2000), price = new Float64Array(n + 2000);
   price[0] = 1;
-  for (let i = 1; i < n + 100; i++) {
-    sig[i] = 0.3 * g();
+  for (let i = 1; i < n + 2000; i++) {
+    a[i] = 0.998 * a[i - 1] + Math.sqrt(1 - 0.998 ** 2) * 0.04 * g();
     // fat-ish tails so the Gaussian bands start mis-calibrated
     const shock = g() * (rng() < 0.1 ? 2.5 : 1);
-    price[i] = price[i - 1] * Math.exp(vol * (shock + sig[i - 1] / Math.sqrt(1)));
+    price[i] = price[i - 1] * Math.exp(vol * (shock + a[i - 1]));
   }
   const agg = emptyAgg();
   for (let i = 1; i < n; i++) {
     const mus = {};
-    for (const h of HORIZONS) mus[h] = [0, sig[i] / Math.sqrt(h), -sig[i] / Math.sqrt(h)];
+    for (const h of HORIZONS) mus[h] = [0, a[i] * Math.sqrt(h), -a[i] * Math.sqrt(h)];
     const { resolved } = eng.step(i * MINUTE, price[i], vol, mus);
-    for (const r of resolved) if (r.h === 5 && i > 10000) addResolution(agg, r);
+    for (const r of resolved) if (r.h === H && i > 40000) addResolution(agg, r);
   }
-  const w = eng.weights(5);
+  const w = eng.weights(H);
   assert.ok(w[1] > w[0] && w[0] > w[2], `weights ${w}`);
   const s = summarize(agg);
-  assert.ok(Math.abs(s.cov[1] - 0.8) < 0.02, `80% band coverage ${s.cov[1]}`);
-  assert.ok(Math.abs(s.cov[0] - 0.5) < 0.02, `50% band coverage ${s.cov[0]}`);
+  assert.ok(Math.abs(s.cov[1] - 0.8) < 0.03, `80% band coverage ${s.cov[1]}`);
+  assert.ok(Math.abs(s.cov[0] - 0.5) < 0.03, `50% band coverage ${s.cov[0]}`);
   assert.ok(s.acc > 0.5, `accuracy ${s.acc}`);
 });
 
@@ -146,18 +174,23 @@ test('engine: restoring from a snapshot continues almost exactly like the origin
   const model = toyModel();
   const a = new Engine(model, freshState(['rw', 'good', 'bad'], 0));
   const price = [1];
-  for (let i = 1; i < 3000; i++) price.push(price[i - 1] * Math.exp(0.001 * (rng() - 0.5)));
+  for (let i = 1; i < 8000; i++) price.push(price[i - 1] * Math.exp(0.001 * (rng() - 0.5)));
   const mus = (i) => Object.fromEntries(HORIZONS.map((h) => [h, [0, Math.sin(i) * 0.1, -Math.sin(i) * 0.1]]));
-  for (let i = 1; i < 2000; i++) a.step(i * MINUTE, price[i], 0.001, mus(i));
+  for (let i = 1; i < 5000; i++) a.step(i * MINUTE, price[i], 0.001, mus(i));
   const b = new Engine(model, JSON.parse(JSON.stringify(a.snapshot())));
-  for (let i = 2000; i < 3000; i++) {
+  let n = 0;
+  for (let i = 5000; i < 8000; i++) {
     const pa = a.step(i * MINUTE, price[i], 0.001, mus(i)).pred;
     const pb = b.step(i * MINUTE, price[i], 0.001, mus(i)).pred;
+    assert.equal(!!pa, isIssue(i * MINUTE));
+    if (!pa) continue;
+    n++;
     for (const h of HORIZONS) {
       assert.ok(Math.abs(pa.h[h].p - pb.h[h].p) < 1e-5);
       assert.ok(Math.abs(pa.h[h].hi[1] - pb.h[h].hi[1]) < 1e-7);
     }
   }
+  assert.equal(n, 3000 / CADENCE);
 });
 
 test('expertPredictions refuses rows with missing features', () => {
@@ -169,7 +202,7 @@ test('expertPredictions refuses rows with missing features', () => {
 });
 
 test('feature groups cover every feature exactly once', () => {
-  const all = featureIndices(['micro', 'btc', 'trend', 'range', 'activity', 'time']);
+  const all = featureIndices(GROUP_NAMES);
   assert.equal(all.length, D);
   assert.equal(new Set(all).size, D);
   assert.equal(EXPERTS[0].id, 'rw');

@@ -28,23 +28,30 @@ export function parseWsKline(k) {
   };
 }
 
-const FIELDS = ['t', 'o', 'h', 'l', 'c', 'v', 'qv', 'tr', 'tb', 'bc', 'bv', 'btb'];
+const FIELDS = ['t', 'o', 'h', 'l', 'c', 'v', 'qv', 'tr', 'tb', 'bc', 'bv', 'btb', 'ec', 'fg', 'fg7'];
+
+// Delay before a daily Fear & Greed value (stamped 00:00 UTC) counts as public.
+export const FNG_LAG = 15 * MINUTE;
 
 /**
  * Build an aligned, gap-free minute series (columnar typed arrays).
  * Missing minutes are filled with flat zero-volume candles at the previous close,
  * so index i always corresponds to S.t[0] + i * MINUTE.
  *
- * Fields: t o h l c v qv tr tb (ADA) · bc bv btb (BTC close, volume, taker-buy volume) · syn (1 = filled)
+ * Fields: t o h l c v qv tr tb (ADA) · bc bv btb (BTC close, volume, taker-buy volume) · ec (ETH
+ * close) · fg fg7 (Fear & Greed now and 7 days earlier: the last value that was public at the
+ * close of each minute; 50 = neutral when unknown) · syn (1 = filled).
  *
  * @param {Array} ada   ADAUSDT candles (any order, duplicates allowed)
  * @param {Array} btc   BTCUSDT candles
  * @param {number} endMs open time of the last minute to include
+ * @param {{eth?: Array, fng?: {t:number,v:number}[]}} extra
  */
-export function buildSeries(ada, btc, endMs) {
-  const A = new Map(), B = new Map();
+export function buildSeries(ada, btc, endMs, extra = {}) {
+  const A = new Map(), B = new Map(), E = new Map();
   for (const k of ada) if (k.t <= endMs) A.set(k.t, k);
   for (const k of btc) if (k.t <= endMs) B.set(k.t, k);
+  for (const k of extra.eth || []) if (k.t <= endMs) E.set(k.t, k);
   if (!A.size || !B.size) return allocSeries(0);
   let firstA = Infinity, firstB = Infinity;
   for (const t of A.keys()) if (t < firstA) firstA = t;
@@ -54,7 +61,9 @@ export function buildSeries(ada, btc, endMs) {
   if (n <= 0) return allocSeries(0);
   const S = allocSeries(n);
   // previous candles: the latest ones at or before `start` (start itself always exists for one side)
-  let pa = latestBefore(A, start), pb = latestBefore(B, start);
+  let pa = latestBefore(A, start), pb = latestBefore(B, start), pe = latestBefore(E, start);
+  const fng = sortedByT(extra.fng);
+  let jg = -1, jg7 = -1;
   for (let i = 0; i < n; i++) {
     const t = start + i * MINUTE;
     S.t[i] = t;
@@ -65,13 +74,26 @@ export function buildSeries(ada, btc, endMs) {
     S.o[i] = a.o; S.h[i] = a.h; S.l[i] = a.l; S.c[i] = a.c;
     S.v[i] = a.v; S.qv[i] = a.qv; S.tr[i] = a.tr; S.tb[i] = a.tb;
     S.bc[i] = b.c; S.bv[i] = b.v; S.btb[i] = b.tb;
-    pa = a; pb = b;
+    const e = E.get(t) || pe;
+    S.ec[i] = e ? e.c : 1; // no ETH data: constant, so ETH returns read as zero
+    pa = a; pb = b; pe = e;
+    // a value is usable at the close of minute t if it was public by then
+    const close = t + MINUTE;
+    while (jg + 1 < fng.length && fng[jg + 1].t + FNG_LAG <= close) jg++;
+    while (jg7 + 1 < fng.length && fng[jg7 + 1].t + FNG_LAG <= close - 7 * 1440 * MINUTE) jg7++;
+    S.fg[i] = jg >= 0 ? fng[jg].v : 50;
+    S.fg7[i] = jg7 >= 0 ? fng[jg7].v : S.fg[i];
   }
   return S;
 }
 
+function sortedByT(a) {
+  return (a || []).filter((x) => Number.isFinite(x.t) && Number.isFinite(x.v)).sort((x, y) => x.t - y.t);
+}
+
 function latestBefore(M, t) {
   let best = null;
+  if (!M.size) return null;
   for (const [k, v] of M) if (k <= t && (!best || k > best.t)) best = v;
   return best;
 }

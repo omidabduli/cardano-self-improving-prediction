@@ -1,7 +1,7 @@
 // Live market data in the browser: REST history + a WebSocket stream, both straight from
 // Binance's public market-data endpoints (no key, no server in between).
 
-import { REST_HOSTS, WS_HOSTS, SYMBOL, BTC_SYMBOL, MINUTE } from '../core/config.js';
+import { REST_HOSTS, WS_HOSTS, SYMBOL, BTC_SYMBOL, ETH_SYMBOL, MINUTE } from '../core/config.js';
 import { parseKline, parseWsKline } from '../core/candles.js';
 
 let restHost = 0;
@@ -29,12 +29,28 @@ export async function serverClockOffset() {
   const t0 = Date.now();
   const { serverTime } = await getJSON('/api/v3/time');
   const t1 = Date.now();
-  const off = serverTime - (t0 + t1) / 2;
+  const off = Math.round(serverTime - (t0 + t1) / 2); // whole ms: Binance rejects fractional times
   return Math.abs(off) > 2000 ? off : 0; // ignore sub-2s differences (network jitter)
+}
+
+/**
+ * Daily Fear & Greed values [{t, v}]: the copy the pipeline published (so the browser sees
+ * exactly what the record used) merged with the newest days straight from alternative.me.
+ */
+export async function fetchFearGreed(publishedUrl) {
+  const m = new Map();
+  const add = (rows) => { for (const x of rows) if (Number.isFinite(x.t) && Number.isFinite(x.v)) m.set(x.t, x); };
+  await Promise.all([
+    fetch(publishedUrl, { cache: 'no-store' }).then((r) => (r.ok ? r.json() : [])).then(add).catch(() => {}),
+    fetch('https://api.alternative.me/fng/?limit=10').then((r) => r.json())
+      .then((j) => add(j.data.map((d) => ({ t: Number(d.timestamp) * 1000, v: Number(d.value) })))).catch(() => {}),
+  ]);
+  return [...m.values()].sort((a, b) => a.t - b.t);
 }
 
 /** Closed and open 1m klines for [startMs, endMs]. */
 export async function fetchKlines(symbol, startMs, endMs) {
+  startMs = Math.floor(startMs); endMs = Math.floor(endMs);
   const pages = [];
   for (let s = startMs; s <= endMs; s += 1000 * MINUTE) pages.push(s);
   const res = await Promise.all(pages.map((s) =>
@@ -59,7 +75,7 @@ export class LiveStream {
   }
 
   connect() {
-    const streams = [`${SYMBOL.toLowerCase()}@kline_1m`, `${BTC_SYMBOL.toLowerCase()}@kline_1m`, `${SYMBOL.toLowerCase()}@aggTrade`].join('/');
+    const streams = [SYMBOL, BTC_SYMBOL, ETH_SYMBOL].map((s) => `${s.toLowerCase()}@kline_1m`).concat(`${SYMBOL.toLowerCase()}@aggTrade`).join('/');
     const url = `${WS_HOSTS[this.hostIdx % WS_HOSTS.length]}/stream?streams=${streams}`;
     this.cb.onState?.('connecting');
     let opened = false;

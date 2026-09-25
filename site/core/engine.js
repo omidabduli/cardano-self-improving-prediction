@@ -1,14 +1,13 @@
 // The online learner. It is stepped once per closed minute, in the backend (official record)
 // and in every visitor's browser (live view), starting from the same published checkpoint.
-//
-// Three things learn continuously, every minute:
+// It issues a forecast every CADENCE minutes and learns whenever one of them matures:
 //   1. Hedge: each expert's trust weight = exp(-eta * its discounted recent squared error).
 //   2. Adaptive conformal inference: each prediction band widens after misses and narrows
 //      after hits until its hit-rate matches the promised coverage (50/80/95 %).
 //   3. Online logistic calibration: maps the ensemble signal to an honest P(up)
 //      (a learned slope only; no up/down bias, so calls never just follow recent drift).
 
-import { HORIZONS, BANDS, BAND_Q, Q_LEVELS, Z_CLIP, ONLINE, STRONG_EDGE } from './config.js';
+import { HORIZONS, BANDS, BAND_Q, Q_LEVELS, Z_CLIP, ONLINE, STRONG_EDGE, isIssue } from './config.js';
 
 const LN2 = Math.LN2;
 const decay = (halfLife) => Math.exp(-LN2 / halfLife);
@@ -82,7 +81,8 @@ export class Engine {
    * @param {number} t      minute open time (ms); must be exactly previous t + 60s
    * @param {number} close  close price of that minute
    * @param {number} vol    volatility estimate at t (features.vol)
-   * @param {object|null} mus expert predictions per horizon (models.expertPredictions) or null
+   * @param {object|null} mus expert predictions per horizon (models.expertPredictions) or null;
+   *                        only used on issue minutes (config.isIssue), so callers may skip it otherwise
    * @returns {{resolved: object[], pred: object|null}}
    */
   step(t, close, vol, mus) {
@@ -94,7 +94,7 @@ export class Engine {
     }
     this.s.pending = keep;
     let pred = null;
-    if (mus && Number.isFinite(vol) && vol > 0) pred = this._predict(t, close, vol, mus);
+    if (mus && isIssue(t) && Number.isFinite(vol) && vol > 0) pred = this._predict(t, close, vol, mus);
     this.s.t = t;
     return { resolved, pred };
   }
@@ -133,7 +133,7 @@ export class Engine {
     }
 
     return {
-      t: p[P_T], h, c0: p[P_C], c1: close, y, z: zc, mu, p: p[P_P], hit, inb,
+      t: p[P_T], h, c0: p[P_C], c1: close, y, z: zc, mu, ret: mu * p[P_VOL] * Math.sqrt(h), p: p[P_P], hit, inb,
       strong: Math.abs(p[P_P] - 0.5) >= STRONG_EDGE,
       mus: p.slice(P_E),
     };

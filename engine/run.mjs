@@ -10,13 +10,13 @@
 //
 // Flags: --bootstrap (start from scratch)  --evolve (force a retrain now)  --warmup-days N
 
-import { MINUTE, DAY_MIN, HORIZONS, SYMBOL, BTC_SYMBOL } from '../site/core/config.js';
+import { MINUTE, DAY_MIN, HORIZONS, SYMBOL, BTC_SYMBOL, ETH_SYMBOL, isIssue } from '../site/core/config.js';
 import { buildSeries, indexOf } from '../site/core/candles.js';
 import { D, WARMUP } from '../site/core/features.js';
 import { expertPredictions, EXPERTS } from '../site/core/models.js';
 import { Engine } from '../site/core/engine.js';
 import { emptyHorizonAggs, addResolution, mergeAgg, roundAgg } from '../site/core/metrics.js';
-import { fetchKlines, lastHost } from './binance.mjs';
+import { fetchKlines, fetchFearGreed, lastHost } from './binance.mjs';
 import { makeDataset, evolve, buildModel, warmup, GEN0 } from './train.mjs';
 import { readJSON, writeJSON, isoDay, isoMinute, appendPredictionRows, listPredictionDays, listMonths, ROOT } from './store.mjs';
 import { execSync } from 'node:child_process';
@@ -25,8 +25,8 @@ const args = process.argv.slice(2);
 const flag = (f) => args.includes(f);
 const opt = (f, d) => { const i = args.indexOf(f); return i >= 0 ? Number(args[i + 1]) : d; };
 const log = (...a) => console.log(...a);
-const FETCH_DAYS_TRAIN = 73; // 60-day max window + 10 validation days + margin
-const WARMUP_DAYS = opt('--warmup-days', 14);
+const FETCH_DAYS_TRAIN = 77; // 60-day max window + 10 validation days + 1-day targets + 3-day warm-up + margin
+const WARMUP_DAYS = opt('--warmup-days', 30);
 // how far back one run can backfill if GitHub didn't run the job for a while
 const REPLAY_DAYS = 7;
 
@@ -48,22 +48,6 @@ function csvRow(t, close, pred) {
     const x = pred.h[h];
     return [bps(x.ret, 2), x.p.toFixed(4), bps(x.lo[1], 1), bps(x.hi[1], 1)].join(',');
   }).join(',');
-}
-
-// Several tournament rounds in one generation (bootstrap) read as one: from the first
-// champion's score to the final winner's, promoted if any round promoted.
-function mergeRounds(a, b) {
-  const out = { specialists: b.specialists };
-  for (const k of ['linear', 'forest']) {
-    out[k] = {
-      ...b[k],
-      champion: a[k].champion,
-      challenger: b[k].challenger ?? a[k].challenger,
-      candidates: a[k].candidates + b[k].candidates,
-      promoted: a[k].promoted || b[k].promoted,
-    };
-  }
-  return out;
 }
 
 function brainSnapshot(eng) {
@@ -90,19 +74,22 @@ async function main() {
   const needTrain = bootstrap || flag('--evolve') || isoDay(Date.parse(model.trainedAt)) !== today;
 
   // ---- 1. data ----
+  // bootstrap also simulates WARMUP_DAYS before today, each with a full training window
   const fromMs = needTrain
-    ? lastClosed - FETCH_DAYS_TRAIN * DAY_MIN * MINUTE
+    ? lastClosed - (FETCH_DAYS_TRAIN + (bootstrap ? WARMUP_DAYS : 0)) * DAY_MIN * MINUTE
     : Math.max(state.t - (WARMUP + 5) * MINUTE, lastClosed - REPLAY_DAYS * DAY_MIN * MINUTE);
   const tf = Date.now();
-  const [ada, btc] = await Promise.all([
+  const [ada, btc, eth, fng] = await Promise.all([
     fetchKlines(SYMBOL, fromMs, lastClosed),
     fetchKlines(BTC_SYMBOL, fromMs, lastClosed),
+    fetchKlines(ETH_SYMBOL, fromMs, lastClosed),
+    fetchFearGreed(Math.ceil((lastClosed - fromMs) / 86400000) + 10, readJSON('fng.json', [])),
   ]);
-  if (!ada.length || !btc.length) throw new Error('no candles returned');
-  const end = Math.min(ada.reduce((m, k) => Math.max(m, k.t), 0), btc.reduce((m, k) => Math.max(m, k.t), 0));
-  const S = buildSeries(ada, btc, end);
+  if (!ada.length || !btc.length || !eth.length) throw new Error('no candles returned');
+  const end = Math.min(...[ada, btc, eth].map((a) => a.reduce((m, k) => Math.max(m, k.t), 0)));
+  const S = buildSeries(ada, btc, end, { eth, fng });
   const ds = makeDataset(S);
-  log(`data: ${ada.length} ADA + ${btc.length} BTC candles via ${lastHost} in ${Date.now() - tf} ms; series ${isoMinute(S.t[0])} .. ${isoMinute(S.t[S.t.length - 1])}`);
+  log(`data: ${ada.length} ADA + ${btc.length} BTC + ${eth.length} ETH candles via ${lastHost}, ${fng.length} Fear & Greed days, in ${Date.now() - tf} ms; series ${isoMinute(S.t[0])} .. ${isoMinute(S.t[S.t.length - 1])}`);
 
   const history = { newAggs: {} };
   let rowsOut = [];
@@ -120,9 +107,9 @@ async function main() {
     }
     if (i0 >= 0) {
       for (let i = Math.max(i0, 0); i < S.t.length; i++) {
-        const mus = i >= WARMUP ? expertPredictions(model, ds.X, D, i) : null;
+        const mus = i >= WARMUP && isIssue(S.t[i]) ? expertPredictions(model, ds.X, D, i) : null;
         const { resolved, pred } = eng.step(S.t[i], S.c[i], ds.vol[i], mus);
-        rowsOut.push(csvRow(S.t[i], S.c[i], pred));
+        if (isIssue(S.t[i])) rowsOut.push(csvRow(S.t[i], S.c[i], pred));
         for (const r of resolved) {
           const dk = isoDay(r.t);
           history.newAggs[dk] ||= emptyHorizonAggs();
@@ -136,24 +123,21 @@ async function main() {
   }
 
   // ---- 3. daily evolution + retraining ----
-  const evo = readJSON('evolution.json', { generations: [] });
+  const evo = bootstrap ? { generations: [] } : readJSON('evolution.json', { generations: [] });
   let trainError = null;
   if (needTrain) {
     // A failed retrain must never stall the public record: keep the current model,
     // still commit the replayed minutes, and try again on the next run.
     try {
       const tt = Date.now();
-      const prevCfg = model?.configs || structuredClone(GEN0);
-      const generation = (model?.generation || 0) + 1;
+      const prevCfg = (!bootstrap && model?.configs) || structuredClone(GEN0);
+      const generation = bootstrap ? 1 : (model?.generation || 0) + 1;
       const seed = Math.floor(nowMs / 86400000);
       log(`evolution: generation ${generation}`);
-      let cfg = prevCfg, report;
-      const rounds = bootstrap ? 2 : 1;
-      for (let r = 0; r < rounds; r++) {
-        const res = evolve(ds, cfg, { seed: seed + r * 101, nLinear: bootstrap ? 12 : 8, nForest: bootstrap ? 4 : 3, log });
-        cfg = res.cfg;
-        report = report ? mergeRounds(report, res.report) : res.report;
-      }
+      // At launch the hand-picked generation 0 is used as is: it won a 300-day walk-forward test,
+      // while evolving on the last ten days first would only fit their noise.
+      let cfg = prevCfg, report = null;
+      if (!bootstrap) ({ cfg, report } = evolve(ds, prevCfg, { seed, log }));
       const trainedAt = new Date().toISOString();
       const fresh = buildModel(ds, cfg, { id: `g${generation}-${trainedAt.slice(0, 16)}`, trainedAt, generation, seed });
       evo.generations.push({ gen: generation, at: trainedAt, day: today, report, cfg });
@@ -170,7 +154,7 @@ async function main() {
         const pStats = Object.fromEntries(HORIZONS.map((h) => [h, [0.5, 0.8, 0.95].map((q) => Number(quant(wu.pAbs[h], q).toFixed(4)))]));
         const days = {};
         for (const [dk, a] of Object.entries(wu.byDay)) days[dk] = Object.fromEntries(HORIZONS.map((h) => [h, roundAgg(a[h])]));
-        writeJSON('backtest.json', { note: 'Walk-forward simulation run once at launch: each day the experts were refit on earlier data only, then the full online system (ensemble weights, conformal bands, calibration) was stepped minute by minute. Hyper-parameters were chosen on overlapping recent days, so treat this as optimistic. The live record is what counts.', from: isoMinute(S.t[S.t.length - WARMUP_DAYS * DAY_MIN]), to: isoMinute(S.t[S.t.length - 1]), days, pAbsQuantiles: pStats });
+        writeJSON('backtest.json', { note: 'Walk-forward simulation run once at launch: each day the experts were refit on earlier data only, then the full online system (ensemble weights, conformal bands, calibration) was stepped minute by minute. The generation-0 settings were chosen in a longer walk-forward test that overlaps these days, so treat this as slightly optimistic. The live record is what counts.', from: isoMinute(S.t[S.t.length - WARMUP_DAYS * DAY_MIN]), to: isoMinute(S.t[S.t.length - 1]), days, pAbsQuantiles: pStats });
         status.liveSince = new Date(state.t + 2 * MINUTE).toISOString();
         log('p-edge quantiles (50/80/95%):', JSON.stringify(pStats));
       }
@@ -223,6 +207,8 @@ async function main() {
   for (const k of Object.keys(totals)) for (const h of HORIZONS) totals[k][h] = roundAgg(totals[k][h]);
 
   writeJSON('state.json', state);
+  // the last 30 days of Fear & Greed: the browser reads the same values the record used
+  writeJSON('fng.json', fng.filter((x) => x.t >= lastClosed - 30 * 86400000));
   const n = S.t.length;
   const out = {
     updatedAt: new Date().toISOString(),

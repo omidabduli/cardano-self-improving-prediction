@@ -53,3 +53,25 @@ export async function fetchKlines(symbol, startMs, endMs, { concurrency = 6 } = 
   const now = Date.now();
   return out.filter((k) => k.T < now); // closed candles only
 }
+
+/**
+ * Daily crypto Fear & Greed index (alternative.me, free, no key) as [{t, v}], oldest first.
+ * Falls back to the copy the pipeline published last time, so a flaky API never changes a
+ * forecast: the browser reads the same published copy.
+ */
+export async function fetchFearGreed(days, fallback = []) {
+  try {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 15000);
+    const res = await fetch(`https://api.alternative.me/fng/?limit=${days}`, { signal: ctl.signal });
+    clearTimeout(timer);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const rows = (await res.json()).data.map((d) => ({ t: Number(d.timestamp) * 1000, v: Number(d.value) }));
+    const m = new Map(fallback.map((x) => [x.t, x]));
+    for (const x of rows) if (Number.isFinite(x.t) && Number.isFinite(x.v)) m.set(x.t, x);
+    return [...m.values()].sort((a, b) => a.t - b.t);
+  } catch (e) {
+    console.log(`::warning::Fear & Greed unavailable (${e.message}); using the published copy`);
+    return fallback;
+  }
+}

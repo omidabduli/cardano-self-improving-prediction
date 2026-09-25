@@ -3,14 +3,20 @@
 
 export const SYMBOL = 'ADAUSDT';
 export const BTC_SYMBOL = 'BTCUSDT';
+export const ETH_SYMBOL = 'ETHUSDT';
 export const TICK = 0.0001; // Binance ADAUSDT price tick
 
 export const MINUTE = 60_000;
 export const DAY_MIN = 1440;
 
-// Forecast horizons in minutes.
-export const HORIZONS = [5, 15, 60];
-export const MAX_H = 60;
+// Forecast horizons in minutes (1 hour, 3 hours, 24 hours).
+export const HORIZONS = [60, 180, 1440];
+export const MAX_H = 1440;
+
+// A new official forecast is issued every CADENCE minutes, at :00, :15, :30 and :45 UTC.
+// It is made from the candle that closes at that moment (open time t, issued at t + 1 min).
+export const CADENCE = 15;
+export const isIssue = (t) => (Math.round(t / MINUTE) + 1) % CADENCE === 0;
 
 // Central prediction intervals and the residual quantile levels that build them.
 export const BANDS = [0.5, 0.8, 0.95];
@@ -23,24 +29,25 @@ export const Z_CLIP = 4;
 
 // Online learning parameters.
 export const ONLINE = {
-  // Hedge (exponential weights) over the experts. Consecutive h-minute outcomes overlap, so
-  // each resolution carries ~5/h of the evidence of a 5-minute one: eta is scaled by 5/h.
-  hedgeEta: 0.05,
-  hedgeRefH: 5,
-  hedgeHalfLifeMin: 7 * DAY_MIN,
+  // Hedge (exponential weights) over the experts. Forecasts come every CADENCE minutes, so
+  // consecutive h-minute outcomes overlap and each carries ~CADENCE/h of an independent one:
+  // eta is scaled by CADENCE/h.
+  hedgeEta: 0.2,
+  hedgeRefH: CADENCE,
+  hedgeHalfLifeMin: 14 * DAY_MIN,
   lossCap: 16,
   // Adaptive conformal inference: step size per horizon for the log band multiplier.
-  aciGamma: { 5: 0.01, 15: 0.01, 60: 0.005 },
+  aciGamma: { 60: 0.02, 180: 0.01, 1440: 0.005 },
   aciMin: -1.2,
   aciMax: 1.5,
   // Online logistic (Platt) calibration of P(up).
-  plattHalfLifeMin: 5 * DAY_MIN,
-  plattPrior: 400, // pseudo-observations anchoring the calibration at start
+  plattHalfLifeMin: 30 * DAY_MIN,
+  plattPrior: 2000, // pseudo-observations anchoring the calibration at start
   plattAMax: 12,
 };
 
 // A call counts as "confident" when P(up) is at least this far from 50%.
-export const STRONG_EDGE = 0.03;
+export const STRONG_EDGE = 0.05;
 
 // Hosts tried in order. data-api.binance.vision is Binance's public market-data-only
 // endpoint (works where the main API is geo-restricted).

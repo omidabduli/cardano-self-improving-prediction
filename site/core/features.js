@@ -1,5 +1,6 @@
-// Feature engineering. Every feature at minute i uses only candles 0..i (strictly causal),
-// so the same function produces identical inputs in the backend and in the browser.
+// Feature engineering for the 1 h / 3 h / 24 h forecasts. Every feature at minute i uses only
+// data up to the close of minute i (strictly causal), so the same function produces identical
+// inputs in the backend and in the browser.
 //
 // Returns are standardised by a local volatility estimate so the models see a roughly
 // stationary problem whether the market is calm or wild.
@@ -7,23 +8,27 @@
 import { TICK } from './config.js';
 
 export const GROUPS = {
-  // Order-flow / bid-ask microstructure of the last few minutes
-  micro: ['pos0', 'pos1', 'vw0', 'vw5', 'ofi1', 'ofi5', 'ofi15', 'r1', 'r2', 'r3'],
-  // Bitcoin lead-lag: BTC moves and ADA's lag behind them
-  btc: ['rb1', 'rb2', 'rb5', 'res2', 'res5', 'res15', 'bofi1', 'bofi5'],
-  // Momentum / reversal over longer windows
-  trend: ['r5', 'r10', 'r15', 'r30', 'r60', 'r120', 'r240'],
-  // Where the price sits inside its recent high-low range
-  range: ['rng15', 'rng60', 'rng240'],
+  // Momentum / reversal from 15 minutes to 3 days
+  trend: ['r15', 'r60', 'r180', 'r360', 'r720', 'r1440', 'r2880', 'r4320'],
+  // Bitcoin: its own moves and how far ADA lags behind them
+  btc: ['rb60', 'rb360', 'rb1440', 'res60', 'res360', 'res1440'],
+  // Ethereum, the other large-cap driver
+  eth: ['re60', 're360', 'res_e360', 'res_e1440'],
+  // Where the price sits inside its recent high-low range, and against its VWAP
+  range: ['rng60', 'rng360', 'rng1440', 'rng4320', 'vw360', 'vw1440'],
+  // Taker buy/sell pressure
+  flow: ['ofi60', 'ofi360', 'ofi1440', 'bofi360'],
   // Volume, trade intensity and volatility regime
-  activity: ['lvol', 'lvol15', 'lvr', 'ntr'],
-  // Time of day (crypto has strong intraday seasonality)
-  time: ['tod_s', 'tod_c', 'tod_s2', 'tod_c2'],
+  activity: ['lvol60', 'lvol1440', 'lvr60', 'lvr1440', 'ntr60'],
+  // Time of day and day of week (UTC)
+  time: ['tod_s', 'tod_c', 'dow_s', 'dow_c'],
+  // Market-wide sentiment: the daily crypto Fear & Greed index (alternative.me)
+  sentiment: ['fng', 'fng7'],
 };
 export const GROUP_NAMES = Object.keys(GROUPS);
 export const FEATURES = GROUP_NAMES.flatMap((g) => GROUPS[g]);
 export const D = FEATURES.length;
-export const WARMUP = 241; // minutes of history needed before the first valid feature row
+export const WARMUP = 4321; // minutes of history needed before the first valid feature row (3 days)
 
 export function featureIndices(groups) {
   const out = [];
@@ -31,24 +36,42 @@ export function featureIndices(groups) {
   return out.sort((a, b) => a - b);
 }
 
+// Rolling max / min over the last w values (monotonic deque), O(n).
+function rollingExtreme(a, w, isMax) {
+  const n = a.length, out = new Float64Array(n), q = new Int32Array(n);
+  let head = 0, tail = 0;
+  for (let i = 0; i < n; i++) {
+    const v = a[i];
+    while (tail > head && (isMax ? a[q[tail - 1]] <= v : a[q[tail - 1]] >= v)) tail--;
+    q[tail++] = i;
+    if (q[head] <= i - w) head++;
+    out[i] = a[q[head]];
+  }
+  return out;
+}
+
 /**
  * Compute the feature matrix for series S (from candles.buildSeries).
  * @param {object} S
  * @param {number} from first index to compute (earlier rows stay NaN)
+ * @param {number} step compute only rows issued on a multiple of `step` minutes (others stay
+ *                    NaN); 1 = all rows. Any divisor of CADENCE keeps every issue minute.
  * @returns {{X: Float64Array, vol: Float64Array, D: number}} row-major n x D matrix + vol per minute
  */
-export function computeFeatures(S, from = WARMUP) {
+export function computeFeatures(S, from = WARMUP, step = 1) {
   const n = S.t.length;
   const X = new Float64Array(n * D).fill(NaN);
   const vol = new Float64Array(n).fill(NaN);
   if (n <= WARMUP) return { X, vol, D };
 
-  const lc = new Float64Array(n), lb = new Float64Array(n);
-  for (let i = 0; i < n; i++) { lc[i] = Math.log(S.c[i]); lb[i] = Math.log(S.bc[i]); }
+  const lc = new Float64Array(n), lb = new Float64Array(n), le = new Float64Array(n);
+  for (let i = 0; i < n; i++) { lc[i] = Math.log(S.c[i]); lb[i] = Math.log(S.bc[i]); le[i] = Math.log(S.ec[i]); }
 
   // prefix sums (length n+1) for O(1) rolling window sums
   const pre = (fn) => { const p = new Float64Array(n + 1); for (let i = 0; i < n; i++) p[i + 1] = p[i] + fn(i); return p; };
   const pR2 = pre((i) => (i ? (lc[i] - lc[i - 1]) ** 2 : 0));
+  // 5-minute returns (less bid-ask bounce than 1-minute ones) for the volatility estimate
+  const pR5 = pre((i) => (i >= 5 ? (lc[i] - lc[i - 5]) ** 2 / 5 : 0));
   const pV = pre((i) => S.v[i]);
   const pQ = pre((i) => S.qv[i]);
   const pF = pre((i) => 2 * S.tb[i] - S.v[i]);
@@ -56,54 +79,57 @@ export function computeFeatures(S, from = WARMUP) {
   const pBV = pre((i) => S.bv[i]);
   const pBF = pre((i) => 2 * S.btb[i] - S.bv[i]);
   const sum = (p, i, w) => p[i + 1] - p[i + 1 - w];
-
-  const pos = (j) => { const hh = S.h[j], ll = S.l[j]; return hh > ll ? (S.c[j] - ll) / (hh - ll) - 0.5 : 0; };
   const flow = (pf, pv, i, w) => { const vv = sum(pv, i, w); return vv > 0 ? sum(pf, i, w) / vv : 0; };
 
+  const RW = [60, 360, 1440, 4320];
+  const hiW = RW.map((w) => rollingExtreme(S.h, w, true));
+  const loW = RW.map((w) => rollingExtreme(S.l, w, false));
+
   for (let i = Math.max(from, WARMUP); i < n; i++) {
+    if (step > 1 && (Math.round(S.t[i] / 60000) + 1) % step) continue;
     const c = S.c[i];
-    const floor = 0.5 * TICK / c; // half a price tick: realistic minimum 1-minute move
+    const floor = 0.5 * TICK / c;
     const f2 = floor * floor;
-    const rv15 = Math.max(sum(pR2, i, 15) / 15, f2);
-    const rv30 = sum(pR2, i, 30) / 30;
-    const rv240 = Math.max(sum(pR2, i, 240) / 240, f2);
-    const vo = Math.max(Math.sqrt(0.5 * rv30 + 0.5 * rv240), floor);
+    const rv60 = Math.max(sum(pR2, i, 60) / 60, f2);
+    const rv1440 = Math.max(sum(pR2, i, 1440) / 1440, f2);
+    const rv4320 = Math.max(sum(pR2, i, 4320) / 4320, f2);
+    // equal blend of 1 h, 6 h, 24 h and 3 d realised variance: the sharpest calibrated ranges in testing
+    const v5 = (sum(pR5, i, 60) / 60 + sum(pR5, i, 360) / 360 + sum(pR5, i, 1440) / 1440 + sum(pR5, i, 4320) / 4320) / 4;
+    const vo = Math.max(Math.sqrt(v5), floor);
     vol[i] = vo;
     const r = (w) => (lc[i] - lc[i - w]) / (vo * Math.sqrt(w));
     const rb = (w) => (lb[i] - lb[i - w]) / (vo * Math.sqrt(w));
+    const re = (w) => (le[i] - le[i - w]) / (vo * Math.sqrt(w));
+    const vwap = (w) => { const vv = sum(pV, i, w), qq = sum(pQ, i, w); return vv > 0 && qq > 0 ? Math.log((c * vv) / qq) / (vo * Math.sqrt(w)) : 0; };
 
     let k = i * D;
-    // micro
-    X[k++] = pos(i);
-    X[k++] = pos(i - 1);
-    X[k++] = S.v[i] > 0 && S.qv[i] > 0 ? Math.log((c * S.v[i]) / S.qv[i]) / vo : 0; // close vs 1m VWAP
-    const v5 = sum(pV, i, 5), q5 = sum(pQ, i, 5);
-    X[k++] = v5 > 0 && q5 > 0 ? Math.log((c * v5) / q5) / vo : 0; // close vs 5m VWAP
-    X[k++] = flow(pF, pV, i, 1);
-    X[k++] = flow(pF, pV, i, 5);
-    X[k++] = flow(pF, pV, i, 15);
-    X[k++] = r(1); X[k++] = r(2); X[k++] = r(3);
-    // btc
-    X[k++] = rb(1); X[k++] = rb(2); X[k++] = rb(5);
-    X[k++] = rb(2) - r(2); X[k++] = rb(5) - r(5); X[k++] = rb(15) - r(15);
-    X[k++] = flow(pBF, pBV, i, 1);
-    X[k++] = flow(pBF, pBV, i, 5);
     // trend
-    X[k++] = r(5); X[k++] = r(10); X[k++] = r(15); X[k++] = r(30); X[k++] = r(60); X[k++] = r(120); X[k++] = r(240);
-    // range
-    for (const w of [15, 60, 240]) {
-      let hi = -Infinity, lo = Infinity;
-      for (let j = i - w + 1; j <= i; j++) { if (S.h[j] > hi) hi = S.h[j]; if (S.l[j] < lo) lo = S.l[j]; }
-      X[k++] = hi > lo ? (c - lo) / (hi - lo) - 0.5 : 0;
-    }
+    for (const w of [15, 60, 180, 360, 720, 1440, 2880, 4320]) X[k++] = r(w);
+    // btc
+    X[k++] = rb(60); X[k++] = rb(360); X[k++] = rb(1440);
+    X[k++] = rb(60) - r(60); X[k++] = rb(360) - r(360); X[k++] = rb(1440) - r(1440);
+    // eth
+    X[k++] = re(60); X[k++] = re(360); X[k++] = re(360) - r(360); X[k++] = re(1440) - r(1440);
+    // range + vwap
+    for (let j = 0; j < RW.length; j++) { const hi = hiW[j][i], lo = loW[j][i]; X[k++] = hi > lo ? (c - lo) / (hi - lo) - 0.5 : 0; }
+    X[k++] = vwap(360); X[k++] = vwap(1440);
+    // flow
+    X[k++] = flow(pF, pV, i, 60); X[k++] = flow(pF, pV, i, 360); X[k++] = flow(pF, pV, i, 1440);
+    X[k++] = flow(pBF, pBV, i, 360);
     // activity
-    X[k++] = Math.log1p(S.v[i]) - Math.log1p(sum(pV, i, 60) / 60);
-    X[k++] = Math.log1p(sum(pV, i, 15) / 15) - Math.log1p(sum(pV, i, 240) / 240);
-    X[k++] = 0.5 * (Math.log(rv15) - Math.log(rv240));
-    X[k++] = Math.log1p(S.tr[i]) - Math.log1p(sum(pN, i, 60) / 60);
-    // time of day (UTC)
-    const tod = (((S.t[i] / 60000) % 1440) / 1440) * 2 * Math.PI;
-    X[k++] = Math.sin(tod); X[k++] = Math.cos(tod); X[k++] = Math.sin(2 * tod); X[k++] = Math.cos(2 * tod);
+    X[k++] = Math.log1p(sum(pV, i, 60) / 60) - Math.log1p(sum(pV, i, 1440) / 1440);
+    X[k++] = Math.log1p(sum(pV, i, 1440) / 1440) - Math.log1p(sum(pV, i, 4320) / 4320);
+    X[k++] = 0.5 * (Math.log(rv60) - Math.log(rv1440));
+    X[k++] = 0.5 * (Math.log(rv1440) - Math.log(rv4320));
+    X[k++] = Math.log1p(sum(pN, i, 60) / 60) - Math.log1p(sum(pN, i, 1440) / 1440);
+    // time (UTC); 1970-01-01 was a Thursday
+    const mins = S.t[i] / 60000;
+    const tod = ((mins % 1440) / 1440) * 2 * Math.PI;
+    const dow = (((mins / 1440 + 3) % 7) / 7) * 2 * Math.PI;
+    X[k++] = Math.sin(tod); X[k++] = Math.cos(tod); X[k++] = Math.sin(dow); X[k++] = Math.cos(dow);
+    // sentiment (each value only from the minute it was public; see candles.buildSeries)
+    X[k++] = S.fg[i] / 50 - 1;
+    X[k++] = (S.fg[i] - S.fg7[i]) / 50;
   }
   return { X, vol, D };
 }

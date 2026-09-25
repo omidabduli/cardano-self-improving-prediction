@@ -1,21 +1,21 @@
-// ADAptive front end. Loads the published model + checkpoint, replays every minute since
-// the checkpoint with the same engine the backend uses, then keeps stepping on the live
-// Binance stream. Everything shown is computed here, in the browser.
+// ADAptive front end. Loads the published model + checkpoint, replays every minute since the
+// checkpoint with the same engine the backend uses, then keeps stepping on the live Binance
+// stream. Every forecast and score on the page is computed here, in the browser.
 
-import { HORIZONS, MINUTE, SYMBOL, BTC_SYMBOL, STRONG_EDGE } from '../core/config.js';
+import { HORIZONS, MINUTE, CADENCE, SYMBOL, BTC_SYMBOL, ETH_SYMBOL, STRONG_EDGE, isIssue } from '../core/config.js';
 import { buildSeries, indexOf } from '../core/candles.js';
-import { computeFeatures, D, WARMUP, FEATURES } from '../core/features.js';
+import { computeFeatures, D, WARMUP } from '../core/features.js';
 import { expertPredictions, EXPERTS } from '../core/models.js';
 import { Engine } from '../core/engine.js';
 import { emptyAgg, addResolution, mergeAgg, summarize } from '../core/metrics.js';
-import { fetchKlines, LiveStream, serverClockOffset } from './feed.js';
-import { ForecastChart } from './chart.js';
-import * as mini from './mini.js';
+import { fetchKlines, fetchFearGreed, LiveStream, serverClockOffset } from './feed.js';
+import { drawChart } from './chart.js';
 import * as F from './format.js';
 
-const HCOL = { 5: '#5b8cff', 15: '#2ee6c5', 60: '#ffc857' };
-const EXCOL = { rw: '#6c7a96', micro: '#5b8cff', btc: '#ffb347', swing: '#c77dff', linear: '#2ee6c5', forest: '#22e39a' };
-const KEEP_MIN = 3200;
+const KEEP_MIN = WARMUP + 1500; // candles kept in memory: warm-up + a day for the chart
+const LOG_ROWS = 10;
+const H_NAME = { 60: '1 hour', 180: '3 hours', 1440: '24 hours' };
+const H_SHORT = { 60: '1 h', 180: '3 h', 1440: '24 h' };
 
 const repo = (() => {
   const m = location.hostname.match(/^([^.]+)\.github\.io$/);
@@ -26,26 +26,20 @@ const repo = (() => {
 const app = {
   status: null, model: null, state: null, evo: null, backtest: null, months: {},
   official: new Map(), live: new Map(), csvClose: new Map(),
-  ada: new Map(), btc: new Map(), liveCandle: null,
-  price: null, prevPrice: null,
-  engine: null, lastPred: null,
-  selH: 5, range: 180, councilH: 5, learnH: 5,
-  loadedAt: Date.now(), session: Object.fromEntries(HORIZONS.map((h) => [h, emptyAgg()])),
-  // everything the browser has scored since the published checkpoint: added to the official
-  // totals so the page is complete up to this minute, however long ago GitHub last ran
-  sinceCkpt: Object.fromEntries(HORIZONS.map((h) => [h, emptyAgg()])), sinceByDay: {},
-  feedSeen: new Set(), firstFeed: true,
-  marketOk: false, stream: null, closeTimer: null,
+  ada: new Map(), btc: new Map(), eth: new Map(), fng: [],
+  price: null, engine: null, lastPred: null,
+  // scored in this browser since the published checkpoint: added to the official totals so
+  // the page is complete up to this minute, however long ago GitHub last ran
+  sinceCkpt: Object.fromEntries(HORIZONS.map((h) => [h, emptyAgg()])),
+  marketOk: false, marketTried: false, closeTimer: null,
 };
-
-// Exposed for the curious: inspect the live engine from the browser console.
-window.adaptive = app;
+window.adaptive = app; // for the curious: inspect the live engine from the console
 
 const $ = (id) => document.getElementById(id);
 const bust = () => Date.now().toString(36);
-// Binance server time: deciding which candle is closed must not depend on the visitor's clock.
-let clockOffset = 0;
+let clockOffset = 0; // Binance server time decides which candle is closed, not the visitor's clock
 const now = () => Date.now() + clockOffset;
+const lastClosedMinute = () => Math.floor(now() / MINUTE) * MINUTE - MINUTE;
 
 async function getJSON(url) {
   const r = await fetch(url, { cache: 'no-store' });
@@ -58,21 +52,11 @@ async function getText(url) {
   return r.text();
 }
 
-// ---------------------------------------------------------------- data access
+// ---------------------------------------------------------------- data
 
-const lastClosedMinute = () => Math.floor(now() / MINUTE) * MINUTE - MINUTE;
 const predAt = (t) => app.official.get(t) || app.live.get(t);
 const closeAt = (t) => app.ada.get(t)?.c ?? app.csvClose.get(t);
-
-function outcome(t, h) {
-  const p = predAt(t);
-  if (!p || !p.h[h]) return null;
-  const c1 = closeAt(t + h * MINUTE);
-  if (c1 === undefined) return null;
-  const x = p.h[h];
-  const y = Math.log(c1 / p.c);
-  return { t, h, y, c0: p.c, c1, p: x.p, hit: y === 0 ? null : (y > 0) === (x.p >= 0.5) ? 1 : 0, in80: y >= x.lo80 && y <= x.hi80 };
-}
+const issuedAt = (t) => t + MINUTE; // a forecast is made when candle t closes
 
 function parseCSV(text) {
   const lines = text.trim().split('\n');
@@ -82,8 +66,8 @@ function parseCSV(text) {
     const t = Date.parse(c[0] + ':00Z');
     const close = Number(c[1]);
     app.csvClose.set(t, close);
-    if (c[2] === '' || c[2] === undefined) continue;
-    const pred = { t, c: close, official: true, h: {} };
+    if (!c[2]) continue;
+    const pred = { t, c: close, h: {} };
     HORIZONS.forEach((h, k) => {
       const o = 2 + k * 4;
       pred.h[h] = { ret: Number(c[o]) / 1e4, p: Number(c[o + 1]), lo80: Number(c[o + 2]) / 1e4, hi80: Number(c[o + 3]) / 1e4 };
@@ -93,15 +77,13 @@ function parseCSV(text) {
 }
 
 function fromEngine(pred) {
-  const o = { t: pred.t, c: pred.c, vol: pred.vol, h: {} };
+  const o = { t: pred.t, c: pred.c, h: {} };
   for (const h of HORIZONS) {
     const x = pred.h[h];
-    o.h[h] = { ret: x.ret, med: x.med, p: x.p, mu: x.mu, w: x.w, mus: x.mus, lo50: x.lo[0], hi50: x.hi[0], lo80: x.lo[1], hi80: x.hi[1], lo95: x.lo[2], hi95: x.hi[2] };
+    o.h[h] = { ret: x.ret, med: x.med, p: x.p, w: x.w, lo80: x.lo[1], hi80: x.hi[1] };
   }
   return o;
 }
-
-// ---------------------------------------------------------------- loading
 
 async function loadPublished() {
   const status = await getJSON(`data/status.json?t=${bust()}`);
@@ -112,32 +94,29 @@ async function loadPublished() {
     modelChanged ? getJSON(`data/evolution.json?v=${encodeURIComponent(status.model.id)}`) : app.evo,
     app.backtest ? app.backtest : getJSON('data/backtest.json').catch(() => null),
   ]);
-  const recentMonths = status.months.slice(-6);
-  const months = await Promise.all(recentMonths.map((m) => getJSON(`data/daily/${m}.json?v=${status.t}`).catch(() => null)));
-  const csvs = await Promise.all(status.days.slice(-2).map((d) => getText(`data/predictions/${d}.csv?v=${status.t}`).catch(() => '')));
+  const months = await Promise.all(status.months.slice(-3).map((m) => getJSON(`data/daily/${m}.json?v=${status.t}`).catch(() => null)));
+  const csvs = await Promise.all(status.days.slice(-3).map((d) => getText(`data/predictions/${d}.csv?v=${status.t}`).catch(() => '')));
   Object.assign(app, { status, model, state, evo, backtest });
   app.siteVersion ??= status.siteVersion;
-  recentMonths.forEach((m, i) => { if (months[i]) app.months[m] = months[i]; });
+  status.months.slice(-3).forEach((m, i) => { if (months[i]) app.months[m] = months[i]; });
   for (const txt of csvs) if (txt) parseCSV(txt);
-  // live predictions older than the new checkpoint are now in the official record
   for (const t of [...app.live.keys()]) if (t <= state.t) app.live.delete(t);
 }
 
 async function loadCandles(fromMs) {
   const t = now();
-  const [ada, btc] = await Promise.all([fetchKlines(SYMBOL, fromMs, t), fetchKlines(BTC_SYMBOL, fromMs, t)]);
-  for (const k of ada) {
-    if (k.T < t) app.ada.set(k.t, k);
-    else app.liveCandle = k;
+  const [ada, btc, eth] = await Promise.all([SYMBOL, BTC_SYMBOL, ETH_SYMBOL].map((s) => fetchKlines(s, fromMs, t)));
+  for (const [list, map] of [[ada, app.ada], [btc, app.btc], [eth, app.eth]]) {
+    for (const k of list) if (k.T < t) map.set(k.t, k); else if (map === app.ada) app.price ??= k.c;
   }
-  for (const k of btc) if (k.T < t) app.btc.set(k.t, k);
-  if (app.liveCandle) app.price ??= app.liveCandle.c;
+  if (!Number.isFinite(app.price) && app.ada.size) app.price = [...app.ada.values()].at(-1).c;
   app.marketOk = true;
 }
 
 function trim() {
   const cut = now() - KEEP_MIN * MINUTE;
-  for (const m of [app.ada, app.btc, app.live]) for (const t of m.keys()) if (t < cut) m.delete(t);
+  for (const m of [app.ada, app.btc, app.eth]) for (const t of m.keys()) if (t < cut) m.delete(t);
+  for (const t of app.live.keys()) if (t < now() - 2 * 1440 * MINUTE) app.live.delete(t);
 }
 
 // ---------------------------------------------------------------- engine
@@ -146,21 +125,20 @@ function rebuildEngine() {
   app.engine = new Engine(app.model, app.state);
   app.live.clear();
   app.sinceCkpt = Object.fromEntries(HORIZONS.map((h) => [h, emptyAgg()]));
-  app.sinceByDay = {};
-  advance(true);
+  advance();
 }
 
-// Step the engine through every closed minute we have both candles for.
-function advance(replaying = false) {
+// Step the engine through every closed minute for which all three markets have a candle.
+function advance() {
   const eng = app.engine;
-  if (!eng || !app.ada.size || !app.btc.size) return false;
+  if (!eng || !app.ada.size) return false;
   let end = -Infinity;
-  for (const t of app.ada.keys()) if (t > end && app.btc.has(t)) end = t;
+  for (const t of app.ada.keys()) if (t > end && app.btc.has(t) && app.eth.has(t)) end = t;
   if (end <= eng.s.t) return false;
-  const start = Math.min(eng.s.t - (WARMUP + 5) * MINUTE, end - 400 * MINUTE);
+  const start = Math.min(eng.s.t - (WARMUP + 5) * MINUTE, end - (WARMUP + 5) * MINUTE);
   const pick = (m) => { const a = []; for (const [t, k] of m) if (t >= start && t <= end) a.push(k); return a; };
-  const S = buildSeries(pick(app.ada), pick(app.btc), end);
-  const Fx = computeFeatures(S);
+  const S = buildSeries(pick(app.ada), pick(app.btc), end, { eth: pick(app.eth), fng: app.fng });
+  const Fx = computeFeatures(S, WARMUP, CADENCE);
   let i = indexOf(S, eng.s.t + MINUTE);
   if (i < 0) {
     // checkpoint older than our data window: restart from the first usable minute
@@ -170,16 +148,10 @@ function advance(replaying = false) {
   }
   let changed = false;
   for (; i < S.t.length; i++) {
-    const mus = i >= WARMUP ? expertPredictions(app.model, Fx.X, D, i) : null;
+    const mus = i >= WARMUP && isIssue(S.t[i]) ? expertPredictions(app.model, Fx.X, D, i) : null;
     const { resolved, pred } = eng.step(S.t[i], S.c[i], Fx.vol[i], mus);
     if (pred) { app.live.set(S.t[i], fromEngine(pred)); app.lastPred = fromEngine(pred); }
-    for (const r of resolved) {
-      addResolution(app.sinceCkpt[r.h], r);
-      const day = new Date(r.t).toISOString().slice(0, 10);
-      app.sinceByDay[day] ||= Object.fromEntries(HORIZONS.map((h) => [h, emptyAgg()]));
-      addResolution(app.sinceByDay[day][r.h], r);
-      if (!replaying && r.t + r.h * MINUTE + MINUTE >= app.loadedAt) addResolution(app.session[r.h], r);
-    }
+    for (const r of resolved) addResolution(app.sinceCkpt[r.h], r);
     changed = true;
   }
   return changed;
@@ -188,19 +160,14 @@ function advance(replaying = false) {
 async function catchUp() {
   if (!app.engine) return;
   try {
-    const from = Math.min(app.engine.s.t, lastClosedMinute()) - 5 * MINUTE;
-    await loadCandles(from);
+    await loadCandles(Math.min(app.engine.s.t, lastClosedMinute()) - 5 * MINUTE);
     if (advance()) renderMinute();
-  } catch (e) { /* the stream or next poll will retry */ }
+  } catch { /* the stream or the next poll will retry */ }
 }
 
 function onClosed(t) {
-  if (app.ada.has(t) && app.btc.has(t)) {
-    clearTimeout(app.closeTimer);
-    if (advance()) renderMinute();
-    return;
-  }
   clearTimeout(app.closeTimer);
+  if (app.ada.has(t) && app.btc.has(t) && app.eth.has(t)) { if (advance()) renderMinute(); return; }
   app.closeTimer = setTimeout(catchUp, 3500);
 }
 
@@ -215,73 +182,39 @@ async function pollStatus() {
     }
     if (app.status && s.t === app.status.t) return;
     await loadPublished();
+    app.fng = await fetchFearGreed(`data/fng.json?v=${s.t}`);
     if (app.marketOk) rebuildEngine();
     renderStatic();
     renderMinute();
-  } catch (e) { /* keep running on the current checkpoint */ }
+  } catch { /* keep running on the current checkpoint */ }
 }
 
-// ---------------------------------------------------------------- live stream
-
 function startStream() {
-  app.stream = new LiveStream({
+  const stream = new LiveStream({
     onState(s) {
-      const pill = $('livePill');
-      pill.classList.toggle('on', s === 'live');
-      pill.classList.toggle('warn', s !== 'live');
-      $('liveText').textContent = s === 'live' ? 'live' : s === 'connecting' ? 'connecting' : 'reconnecting';
+      const el = $('liveState');
+      el.className = 'live ' + (s === 'live' ? 'on' : 'warn');
+      el.textContent = s === 'live' ? 'live' : s === 'connecting' ? 'connecting' : 'reconnecting';
     },
     onOpen() { if (app.engine) catchUp(); },
     onKline(sym, k) {
-      if (sym === SYMBOL) {
-        if (k.closed) { app.ada.set(k.t, k); if (app.liveCandle && app.liveCandle.t <= k.t) app.liveCandle = null; onClosed(k.t); }
-        else { app.liveCandle = k; setPrice(k.c); }
-      } else if (sym === BTC_SYMBOL && k.closed) {
-        app.btc.set(k.t, k);
-        onClosed(k.t);
-      }
+      const map = sym === SYMBOL ? app.ada : sym === BTC_SYMBOL ? app.btc : sym === ETH_SYMBOL ? app.eth : null;
+      if (!map) return;
+      if (k.closed) { map.set(k.t, k); onClosed(k.t); } else if (sym === SYMBOL) setPrice(k.c);
     },
     onTrade(p) { setPrice(p); },
   });
-  app.stream.connect();
+  stream.connect();
 }
 
 let priceRaf = 0;
 function setPrice(p) {
   if (!Number.isFinite(p)) return;
-  app.prevPrice = app.price;
   app.price = p;
-  if (!priceRaf) priceRaf = requestAnimationFrame(() => { priceRaf = 0; renderPrice(); renderChart(); });
+  if (!priceRaf) priceRaf = requestAnimationFrame(() => { priceRaf = 0; renderPrice(); });
 }
 
 // ---------------------------------------------------------------- rendering
-
-function renderPrice() {
-  const el = $('price');
-  if (!Number.isFinite(app.price)) return;
-  const txt = app.price.toFixed(4);
-  if (el.textContent !== '$' + txt) {
-    el.textContent = '$' + txt;
-    if (Number.isFinite(app.prevPrice) && app.prevPrice !== app.price) {
-      el.classList.remove('flash-up', 'flash-down');
-      void el.offsetWidth;
-      el.classList.add(app.price > app.prevPrice ? 'flash-up' : 'flash-down');
-      setTimeout(() => el.classList.remove('flash-up', 'flash-down'), 350);
-    }
-  }
-  const t24 = lastClosedMinute() - 1440 * MINUTE;
-  const c24 = closeAt(t24);
-  const chg = $('chg24');
-  if (c24) {
-    const r = app.price / c24 - 1;
-    chg.textContent = `${F.signedPct(r)} 24h`;
-    chg.className = 'chg ' + (r > 0 ? 'up' : r < 0 ? 'down' : '');
-  }
-  document.title = `$${txt} ADA · ADAptive`;
-}
-
-const ARROW_UP = '<svg class="fc-arrow" viewBox="0 0 24 24"><path d="M12 4l8 10h-5v6H9v-6H4z" fill="currentColor"/></svg>';
-const ARROW_DN = '<svg class="fc-arrow" viewBox="0 0 24 24"><path d="M12 20L4 10h5V4h6v6h5z" fill="currentColor"/></svg>';
 
 function latestPred() {
   if (app.lastPred) return app.lastPred;
@@ -290,519 +223,241 @@ function latestPred() {
   return best;
 }
 
-function renderCards() {
+function renderPrice() {
+  if (!Number.isFinite(app.price)) return;
+  $('price').textContent = F.price(app.price, 4);
+  const c24 = closeAt(lastClosedMinute() - 1440 * MINUTE);
+  if (c24) $('chg24').textContent = F.signedPct(app.price / c24 - 1);
+  document.title = `$${app.price.toFixed(4)} ADA · ADAptive`;
+}
+
+function direction(p) {
+  const edge = Math.abs(p - 0.5);
+  const word = p >= 0.5 ? 'up' : 'down';
+  const pill = edge >= STRONG_EDGE
+    ? `<span class="status active">leans ${word}</span>`
+    : '<span class="status planned">no clear direction</span>';
+  return `<span>${word === 'up' ? 'Up' : 'Down'} <b class="mono">${(Math.max(p, 1 - p) * 100).toFixed(1)}%</b></span>${pill}`;
+}
+
+function renderForecasts() {
   const pred = latestPred();
-  const box = $('forecastCards');
-  if (!pred) { box.innerHTML = '<div class="fc"><div class="fc-main">Waiting for the first forecast…</div></div>'; return; }
-  const tNow = now();
-  box.innerHTML = HORIZONS.map((h) => {
+  if (!pred) { $('forecasts').innerHTML = '<div class="fc"><p class="eyebrow">Waiting for the first forecast…</p></div>'; return; }
+  const tNow = now(), t0 = issuedAt(pred.t);
+  $('forecasts').innerHTML = HORIZONS.map((h) => {
     const x = pred.h[h];
-    const up = x.p >= 0.5;
-    const conf = Math.max(x.p, 1 - x.p);
-    const edge = Math.abs(x.p - 0.5);
-    const badge = edge >= STRONG_EDGE ? '<span class="fc-badge strong">confident</span>' : edge >= 0.01 ? '<span class="fc-badge">lean</span>' : '<span class="fc-badge">no clear edge</span>';
-    const target = pred.c * Math.exp(x.med ?? x.ret);
-    const lo = pred.c * Math.exp(x.lo80), hi = pred.c * Math.exp(x.hi80);
-    const due = pred.t + (h + 1) * MINUTE;
-    // the forecast being checked at the end of the current minute
-    const checkT = lastClosedMinute() - (h - 1) * MINUTE;
-    const chk = predAt(checkT);
-    let check = '';
-    if (chk && Number.isFinite(app.price)) {
-      const y = Math.log(app.price / chk.c);
-      const cu = chk.h[h].p >= 0.5;
-      const state = y === 0 ? '<b>flat</b>' : (y > 0) === cu ? '<b class="win">winning</b>' : '<b class="lose">losing</b>';
-      check = `<span>Checking the ${F.hhmm(checkT + MINUTE)} call (${cu ? '▲' : '▼'}): ${state}</span>`;
-    }
-    const gl = up ? 50 : 50 - Math.min(50, (edge / 0.1) * 50);
-    const gw = Math.min(50, (edge / 0.1) * 50);
-    return `<div class="fc ${edge < 0.004 ? '' : up ? 'up' : 'down'} ${h === app.selH ? 'sel' : ''}" data-h="${h}">
-      <div class="fc-h"><b>${F.horizonLabel(h)}</b><span>ahead</span></div>
-      <div class="fc-main">${up ? ARROW_UP : ARROW_DN}<span class="fc-p">${(conf * 100).toFixed(1)}%</span><span class="fc-word">${up ? 'up' : 'down'}</span></div>
-      ${badge}
-      <div class="fc-detail"><span>median <b>${F.price(target, 5)}</b></span><span>80% range <b>${lo.toFixed(4)}–${hi.toFixed(4)}</b></span></div>
-      <div class="fc-gauge"><i style="left:${gl}%;width:${gw}%;background:${up ? 'var(--up)' : 'var(--down)'}"></i></div>
-      <div class="fc-foot"><span>Checked at ${F.hhmm(due)} · in <b>${F.countdown(due - tNow)}</b></span>${check}</div>
+    const due = t0 + h * MINUTE;
+    const med = pred.c * Math.exp(x.med ?? x.ret);
+    return `<div class="fc">
+      <p class="eyebrow">In ${H_NAME[h]} · ${h >= 1440 ? F.dateShort(due) + ' ' : ''}${F.hhmm(due)}</p>
+      <span class="fc-price">${F.price(med, 4)}</span>
+      <p class="fc-range">80% range ${F.price(pred.c * Math.exp(x.lo80), 4)} – ${F.price(pred.c * Math.exp(x.hi80), 4)}</p>
+      <p class="fc-dir">${direction(x.p)}</p>
+      <p class="fc-due">Checked in ${F.countdown(due - tNow)}</p>
     </div>`;
   }).join('');
+  const next = issuedAt(pred.t) + CADENCE * MINUTE;
+  const committed = app.status ? F.ago(Date.parse(app.status.updatedAt)) : '—';
+  $('issueLine').innerHTML = `<span>Made at <b>${F.hhmm(t0)}</b> from ${F.price(pred.c, 4)}</span>`
+    + `<span>Next forecast in <b>${next > tNow ? F.countdown(next - tNow) : 'a moment'}</b></span>`
+    + `<span>Times in your time zone</span><span>Record committed ${committed}</span>`;
 }
 
-function interpBand(pred, key, k) {
-  // bands at 5/15/60 minutes, interpolated in sqrt-time (uncertainty grows like sqrt(t))
-  const knots = [0, 5, 15, 60];
-  const val = (h) => (h === 0 ? 0 : pred.h[h][key]);
-  if (k <= 5) return key === 'ret' ? val(5) * (k / 5) : val(5) * Math.sqrt(k / 5);
-  for (let j = 1; j < knots.length - 1; j++) {
-    const a = knots[j], b = knots[j + 1];
-    if (k <= b) {
-      const f = key === 'ret' ? (k - a) / (b - a) : (Math.sqrt(k) - Math.sqrt(a)) / (Math.sqrt(b) - Math.sqrt(a));
-      return val(a) + (val(b) - val(a)) * f;
-    }
-  }
-  return val(60);
-}
-
-function fanFor(pred) {
-  if (!pred) return null;
-  const p = structuredClone(pred);
-  for (const h of HORIZONS) {
-    const x = p.h[h];
-    if (x.lo50 === undefined) {
-      // official rows carry the 80% band only: derive the others from its width
-      const c = (x.lo80 + x.hi80) / 2, w = (x.hi80 - x.lo80) / 2;
-      Object.assign(x, { lo50: c - w * 0.526, hi50: c + w * 0.526, lo95: c - w * 1.53, hi95: c + w * 1.53 });
-    }
-  }
-  const steps = [];
-  for (let k = 1; k <= 60; k++) {
-    const s = { x: p.t + (k + 1) * MINUTE, mid: p.c * Math.exp(interpBand(p, 'ret', k)) };
-    for (const key of ['lo50', 'hi50', 'lo80', 'hi80', 'lo95', 'hi95']) s[key] = p.c * Math.exp(interpBand(p, key, k));
-    steps.push(s);
-  }
-  const p60 = p.h[app.selH].p;
-  return { x0: p.t + MINUTE, y0: p.c, steps, dir: Math.abs(p60 - 0.5) < 0.004 ? 0 : p60 > 0.5 ? 1 : -1 };
-}
-
-let chart;
 function renderChart() {
-  if (!chart) return;
-  const tNow = now();
-  const H = app.selH;
-  const x0 = tNow - app.range * MINUTE, x1 = tNow + 62 * MINUTE;
-  const points = [];
-  const lc = lastClosedMinute();
-  const startT = Math.floor(x0 / MINUTE) * MINUTE - 3 * MINUTE;
-  for (let t = startT; t <= lc; t += MINUTE) {
-    const c = closeAt(t);
-    if (c !== undefined) points.push({ x: t + MINUTE, y: c });
+  const tNow = now(), t0 = tNow - 1440 * MINUTE;
+  const series = [];
+  for (const [t, k] of app.ada) if (t >= t0 && (Math.round(t / MINUTE) % 5 === 0)) series.push({ t: t + MINUTE, c: k.c });
+  if (series.length < 10) for (const [t, c] of app.csvClose) if (t >= t0) series.push({ t: t + MINUTE, c });
+  series.sort((a, b) => a.t - b.t);
+  const band = [];
+  const all = new Map([...app.official, ...app.live]);
+  for (const [t, p] of all) {
+    const at = issuedAt(t) + 60 * MINUTE;
+    if (at < t0 || at > tNow) continue;
+    band.push({ t: at, lo: p.c * Math.exp(p.h[60].lo80), hi: p.c * Math.exp(p.h[60].hi80) });
   }
-  let live = null;
-  if (app.marketOk && Number.isFinite(app.price)) { live = { x: tNow, y: app.price }; points.push(live); }
-  else if (points.length) live = null;
-  const corridor = [], results = [];
-  for (let t = startT - (H + 1) * MINUTE; t <= lc; t += MINUTE) {
-    const p = predAt(t);
-    if (!p) continue;
-    const x = p.h[H];
-    const xt = t + (H + 1) * MINUTE;
-    corridor.push({ x: xt, lo: p.c * Math.exp(x.lo80), hi: p.c * Math.exp(x.hi80), mid: p.c * Math.exp(x.ret) });
-    const o = outcome(t, H);
-    if (o) results.push({ x: xt, s: o.hit === null ? -1 : o.hit });
-  }
+  band.sort((a, b) => a.t - b.t);
   const pred = latestPred();
-  chart.set({ x0, x1, now: live ? tNow : (points.at(-1)?.x ?? tNow), points, live, corridor, results, fan: fanFor(pred), lookup: tooltip });
-  $('chartLoading').hidden = points.length > 0;
+  const fc = pred ? HORIZONS.map((h) => {
+    const x = pred.h[h];
+    return { h, t: issuedAt(pred.t) + h * MINUTE, med: pred.c * Math.exp(x.med ?? x.ret), lo: pred.c * Math.exp(x.lo80), hi: pred.c * Math.exp(x.hi80) };
+  }) : [];
+  drawChart($('chartSvg'), { now: tNow, price: app.price ?? series.at(-1)?.c, series, band, fc });
 }
 
-function tooltip(x) {
-  const H = app.selH;
-  const t = x - MINUTE; // candle whose close is shown at x
-  const c = closeAt(t);
-  if (c === undefined) {
-    const p = latestPred();
-    if (!p || x <= p.t + MINUTE) return '';
-    const k = Math.round((x - p.t - MINUTE) / MINUTE);
-    if (k < 1 || k > 60) return '';
-    const f = fanFor(p).steps[k - 1];
-    return `<div class="t">${F.hhmm(x)} · forecast +${k} min</div>
-      <div class="r"><span>Median</span><b>${f.mid.toFixed(5)}</b></div>
-      <div class="r"><span>50% range</span><b>${f.lo50.toFixed(4)}–${f.hi50.toFixed(4)}</b></div>
-      <div class="r"><span>80% range</span><b>${f.lo80.toFixed(4)}–${f.hi80.toFixed(4)}</b></div>
-      <div class="r"><span>95% range</span><b>${f.lo95.toFixed(4)}–${f.hi95.toFixed(4)}</b></div>`;
-  }
-  let html = `<div class="t">${F.hhmm(x)} · ${F.price(c)}</div>`;
-  const made = predAt(t);
-  if (made) {
-    const x5 = made.h[H];
-    const up = x5.p >= 0.5;
-    html += `<div class="r"><span>${F.horizonLabel(H)} call made here</span><b class="${up ? 'ok' : 'no'}">${up ? '▲' : '▼'} ${(Math.max(x5.p, 1 - x5.p) * 100).toFixed(1)}%</b></div>`;
-    const o = outcome(t, H);
-    if (o) html += `<div class="r"><span>Result</span><b class="${o.hit === 1 ? 'ok' : o.hit === 0 ? 'no' : ''}">${o.hit === null ? 'no change' : o.hit ? '✓ right' : '✗ wrong'} (${F.signedPct(Math.exp(o.y) - 1, 2)})</b></div>`;
-    else html += `<div class="r"><span>Result</span><b>pending</b></div>`;
-  }
-  const back = predAt(t - H * MINUTE);
-  if (back) {
-    const lo = back.c * Math.exp(back.h[H].lo80), hi = back.c * Math.exp(back.h[H].hi80);
-    const inside = c >= lo - 1e-12 && c <= hi + 1e-12;
-    html += `<div class="r"><span>Predicted ${H}m earlier</span><b class="${inside ? 'ok' : 'no'}">${lo.toFixed(4)}–${hi.toFixed(4)} ${inside ? '✓' : '✗'}</b></div>`;
-  }
-  return html;
+function totals(h) {
+  return mergeAgg(app.status?.totals?.all?.[h], app.sinceCkpt[h]);
 }
 
-function aggWindow(fromT, toT) {
-  const out = Object.fromEntries(HORIZONS.map((h) => [h, emptyAgg()]));
-  const lc = lastClosedMinute();
-  for (let t = Math.floor(fromT / MINUTE) * MINUTE; t <= Math.min(toT, lc); t += MINUTE) {
-    const p = predAt(t);
-    if (!p) continue;
-    for (const h of HORIZONS) {
-      const o = outcome(t, h);
-      if (!o) continue;
-      const x = p.h[h];
-      const hi = o.hit;
-      const r = { t, h, y: o.y, z: 0, mu: 0, p: x.p, hit: hi, inb: [false, o.in80, false], strong: Math.abs(x.p - 0.5) >= STRONG_EDGE };
-      addResolution(out[h], r);
-    }
-  }
-  return out;
-}
-
-function renderScoreboard() {
-  const tNow = now();
-  const d1 = aggWindow(tNow - 24 * 3600e3, tNow);
-  const tot = app.status?.totals;
-  const cell = (v, sub, cls = '', barPct = null, tick = null, extra = '') => `<div class="score-cell ${extra}"><div class="v ${cls}">${v}</div><div class="s">${sub}</div>${barPct !== null ? `<div class="bar"><i style="width:${Math.max(0, Math.min(100, barPct))}%"></i>${tick !== null ? `<span class="tick" style="left:${tick}%"></span>` : ''}</div>` : ''}</div>`;
-  let html = `<div class="score-row head"><span></span><span>Last 24 hours</span><span>All time</span><span class="opt">80% band hit</span><span class="opt">Confident calls</span></div>`;
-  for (const h of HORIZONS) {
-    const a = summarize(d1[h]);
-    const all = summarize(mergeAgg(tot?.all?.[h], app.sinceCkpt[h]));
-    const accCls = (s) => (!s || s.acc === null ? '' : s.acc > 0.5 ? 'good' : s.acc < 0.5 ? 'bad' : '');
-    const c24 = a ? cell(F.pct(a.acc), `${F.num(a.nm)} checked`, accCls(a), a.acc !== null ? (a.acc - 0.4) / 0.2 * 100 : 0, 50) : cell('—', 'no results yet');
-    let sig = 'no data yet';
-    if (all && all.ni < 50) {
-      // the z-test uses non-overlapping calls only; below ~50 of them any verdict is noise
-      sig = `too early to judge (${all.ni}/50 independent calls)`;
-    } else if (all && all.zscore !== null) {
-      const z = all.zscore;
-      sig = `z = ${z.toFixed(1)} · ${z >= 3 ? 'strong evidence of skill' : z >= 2 ? 'likely skill' : z >= 1 ? 'weak evidence' : 'not beating chance yet'}`;
-    }
-    const call = all ? cell(F.pct(all.acc), `${F.num(all.nm)} · ${sig}`, accCls(all), all.acc !== null ? (all.acc - 0.4) / 0.2 * 100 : 0, 50) : cell('—', 'no results yet');
-    const cov = a ? cell(F.pct(a.cov[1]), `24h · all-time ${all ? F.pct(all.cov[1]) : '—'}`, '', a.cov[1] * 100, 80, 'opt') : cell('—', '', '', null, null, 'opt');
-    const strong = all && all.strongN ? cell(F.pct(all.strongAcc), `${F.num(all.strongN)} calls ≥${(50 + STRONG_EDGE * 100).toFixed(0)}% sure`, accCls({ acc: all.strongAcc }), null, null, 'opt') : cell('—', 'none yet', '', null, null, 'opt');
-    html += `<div class="score-row"><div class="score-h">${F.horizonLabel(h)}</div>${c24}${call}${cov}${strong}</div>`;
-  }
-  $('scoreTable').innerHTML = html;
-  const s = Object.values(app.session).reduce((a, b) => mergeAgg(a, b), null);
-  const ss = summarize(s);
-  $('session').innerHTML = ss
-    ? `Since you opened this page: <b>${ss.n}</b> forecasts checked · <b>${ss.nm ? F.pct(ss.acc) : '—'}</b> right direction (${s.hit}/${s.nm}) · <b>${F.pct(ss.cov[1])}</b> inside their 80% band.`
-    : 'Since you opened this page: the first forecasts will be checked within a minute. Keep watching.';
-}
-
-function renderFeed() {
-  const lc = lastClosedMinute();
-  const items = [];
-  for (let t = lc - 70 * MINUTE; t <= lc; t += MINUTE) {
-    for (const h of HORIZONS) {
-      const o = outcome(t, h);
-      if (o) items.push({ ...o, due: t + (h + 1) * MINUTE });
-    }
-  }
-  items.sort((a, b) => b.due - a.due || a.h - b.h);
-  const top = items.slice(0, 40);
-  if (!top.length) { $('feed').innerHTML = '<li class="empty">The first forecasts are being checked. This list fills up as their time comes.</li>'; return; }
-  $('feed').innerHTML = top.map((o) => {
-    const key = `${o.t}-${o.h}`;
-    const fresh = !app.firstFeed && !app.feedSeen.has(key);
-    app.feedSeen.add(key);
-    const up = o.p >= 0.5;
-    const res = o.hit === null ? '<span class="res tie">=</span>' : o.hit ? '<span class="res ok">✓</span>' : '<span class="res no">✗</span>';
-    const mv = Math.exp(o.y) - 1;
-    return `<li class="${fresh ? 'new' : ''}">${res}<span class="tm">${F.hhmm(o.due)}</span><span class="hz">${F.horizonLabel(o.h)}</span><span class="call">said <span class="${up ? 'u' : 'd'}">${up ? '▲' : '▼'} ${(Math.max(o.p, 1 - o.p) * 100).toFixed(1)}%</span> at ${o.c0.toFixed(4)}</span><span class="mv">${o.c1.toFixed(4)} (${F.signedPct(mv, 2)})<span class="band">${o.in80 ? 'in band' : 'outside'}</span></span></li>`;
+function renderScores() {
+  $('scores').querySelector('tbody').innerHTML = HORIZONS.map((h) => {
+    const a = totals(h), s = summarize(a);
+    if (!s) return `<tr><td class="h">${H_SHORT[h]}</td><td colspan="4">No forecast has reached its time yet. The first ${H_NAME[h]} forecast is checked ${H_NAME[h]} after launch.</td></tr>`;
+    const dir = a.ni ? `${(a.hi / a.ni * 100).toFixed(1)}%` : '—';
+    const z = s.ni >= 10 ? `z = ${s.zscore.toFixed(1)} vs. a coin flip` : 'too few to judge yet';
+    return `<tr>
+      <td class="h">${H_SHORT[h]}</td>
+      <td class="big">${dir}<small>${F.num(s.ni)} independent · ${z}</small></td>
+      <td class="big">${(s.cov[1] * 100).toFixed(1)}%<small>of ${F.num(s.n)} forecasts</small></td>
+      <td class="big">${(s.mae * 100).toFixed(2)}%<small>"no change": ${(s.mae0 * 100).toFixed(2)}%</small></td>
+      <td class="num">${F.num(s.n)}</td>
+    </tr>`;
   }).join('');
-  app.firstFeed = false;
-  if (app.feedSeen.size > 3000) app.feedSeen = new Set([...app.feedSeen].slice(-1500));
+  const since = HORIZONS.reduce((a, h) => a + app.sinceCkpt[h].n, 0);
+  const s = app.status;
+  let note = s ? `Official record committed ${F.ago(Date.parse(s.updatedAt))}.` : '';
+  if (app.marketOk && since) note += ` The ${F.num(since)} results since then were scored in your browser with the same code and data.`;
+  const bt = app.backtest && summarizeBacktest(app.backtest);
+  if (bt) note += ` Launch backtest (${bt.days} simulated days before going live): direction ${bt.dir}, 80% range held ${bt.cov}.`;
+  $('recordNote').textContent = note;
+  if (s?.liveSince) $('liveSince').textContent = `live since ${F.dateShort(Date.parse(s.liveSince))}`;
 }
 
-const ICONS = {
-  rw: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12h18"/><circle cx="12" cy="12" r="3"/></svg>',
-  micro: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 18V9M9 18V5M14 18v-6M19 18V8"/></svg>',
-  btc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h6a3 3 0 010 6H8zm0 6h7a3 3 0 010 6H8zM10 4v2m0 12v2m3-16v2m0 12v2"/></svg>',
-  swing: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 16c3 0 3-8 6-8s3 8 6 8 3-8 6-8"/></svg>',
-  linear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 19L20 5"/><circle cx="7" cy="14" r="1.2"/><circle cx="11" cy="12" r="1.2"/><circle cx="15" cy="7" r="1.2"/><circle cx="17" cy="11" r="1.2"/></svg>',
-  forest: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v18M12 8l-5 5m5-5l5 5M7 13l-3 4m3-4l3 4m7-4l-3 4m3-4l3 4"/></svg>',
-};
+function summarizeBacktest(b) {
+  const days = Object.values(b.days || {});
+  if (!days.length) return null;
+  const per = HORIZONS.map((h) => days.reduce((a, d) => mergeAgg(a, d[h]), null));
+  return {
+    days: days.length,
+    dir: HORIZONS.map((h, k) => `${H_SHORT[h]} ${(per[k].hi / per[k].ni * 100).toFixed(0)}% of ${per[k].ni}`).join(', '),
+    cov: HORIZONS.map((h, k) => `${(per[k].c[1] / per[k].n * 100).toFixed(0)}%`).join(' / '),
+  };
+}
+
+function renderLog() {
+  const tNow = lastClosedMinute();
+  const rows = [];
+  const all = new Map([...app.official, ...app.live]);
+  for (const [t, p] of all) {
+    for (const h of HORIZONS) {
+      const c1 = closeAt(t + h * MINUTE);
+      if (t + h * MINUTE > tNow || c1 === undefined) continue;
+      rows.push({ t, h, p, c1, due: issuedAt(t) + h * MINUTE });
+    }
+  }
+  rows.sort((a, b) => b.due - a.due || a.h - b.h);
+  const today = new Date().toDateString();
+  const when = (ms) => (new Date(ms).toDateString() === today ? F.hhmm(ms) : `${F.dateShort(ms)} ${F.hhmm(ms)}`);
+  $('log').querySelector('tbody').innerHTML = rows.slice(0, LOG_ROWS).map(({ t, h, p, c1 }) => {
+    const x = p.h[h];
+    const y = Math.log(c1 / p.c);
+    const inside = y >= x.lo80 && y <= x.hi80;
+    const dir = y === 0 ? 'flat' : (y > 0) === (x.p >= 0.5) ? 'direction right' : 'direction wrong';
+    return `<tr>
+      <td class="num">${when(issuedAt(t))}</td>
+      <td>${H_SHORT[h]}</td>
+      <td class="num">${F.price(p.c * Math.exp(x.med ?? x.ret), 4)}</td>
+      <td class="num">${F.price(p.c * Math.exp(x.lo80), 4)} – ${F.price(p.c * Math.exp(x.hi80), 4)}</td>
+      <td class="num">${F.price(c1, 4)}</td>
+      <td><span class="status ${inside ? 'done' : 'active'}">${inside ? 'in range' : 'outside'}</span> <small>${dir}</small></td>
+    </tr>`;
+  }).join('') || `<tr><td colspan="6">The first forecasts are checked one hour after launch.</td></tr>`;
+}
 
 function renderCouncil() {
-  const h = app.councilH;
-  const eng = app.engine || (app.model && app.state ? new Engine(app.model, app.state) : null);
-  if (!eng) return;
-  const w = eng.weights(h), sk = eng.skills(h);
-  const pred = app.lastPred;
-  $('council').innerHTML = EXPERTS.map((e, k) => {
-    let vote = '<div class="ex-vote flat">—</div>';
-    if (pred && pred.h[h].mus) {
-      const mv = pred.h[h].mus[k] * pred.vol * Math.sqrt(h);
-      const cls = Math.abs(mv) < 0.05e-4 ? 'flat' : mv > 0 ? 'up' : 'down';
-      vote = `<div class="ex-vote ${cls}" title="Expected move over ${F.horizonWords(h)}">${cls === 'flat' ? '● flat' : (mv > 0 ? '▲ ' : '▼ ') + F.bps(mv, 1).replace(/^[+−]/, '')}</div>`;
-    }
-    return `<div class="expert"><div class="ex-icon" style="color:${EXCOL[e.id]};border-color:${EXCOL[e.id]}55;background:${EXCOL[e.id]}18">${ICONS[e.id]}</div>
-      <div style="min-width:0"><div class="ex-name">${e.name}</div><div class="ex-role">${e.role}</div></div>
-      ${vote}
-      <div class="ex-w"><b>${(w[k] * 100).toFixed(1)}%</b><div class="bar"><i style="width:${Math.min(100, w[k] * 100 * 2.5)}%"></i></div><small>skill ${sk[k] >= 0 ? '+' : ''}${sk[k].toFixed(2)}%</small></div></div>`;
-  }).join('');
-
-  const snaps = Object.keys(app.months).sort().flatMap((m) => app.months[m].snaps || []);
-  const labels = snaps.map((s) => s.at.slice(5, 10) + ' ' + s.at.slice(11, 13) + 'h');
-  const layers = EXPERTS.map((e, k) => ({ name: e.name, color: EXCOL[e.id], values: snaps.map((s) => s.w[h]?.[k] ?? 0) }));
-  labels.push('now');
-  layers.forEach((L, k) => L.values.push(w[k]));
-  mini.stackedArea($('weightsChart'), { labels, layers });
-  $('weightsLegend').innerHTML = EXPERTS.map((e) => `<span><i style="background:${EXCOL[e.id]}"></i>${e.name}</span>`).join('');
-}
-
-function describeCfg(kind, c) {
-  if (!c) return '';
-  if (kind === 'linear') return `λ=${Number(c.lambda).toExponential(1)} · ${c.window}d window · ${c.groups.length} signal groups`;
-  return `${c.trees} trees · depth ${c.depth} · lr ${c.lr} · leaf ≥${c.minLeaf} · ${c.window}d`;
+  const eng = app.engine;
+  const w = Object.fromEntries(HORIZONS.map((h) => [h, eng ? eng.weights(h) : null]));
+  $('council').querySelector('tbody').innerHTML = EXPERTS.map((e, k) => `<tr>
+    <td class="name">${F.esc(e.name)}</td>
+    <td class="reads">${F.esc(e.role)}</td>
+    ${HORIZONS.map((h) => {
+      const v = w[h]?.[k];
+      return `<td class="num">${Number.isFinite(v) ? `<span class="trust"><i style="width:${Math.round(v * 120)}px"></i>${(v * 100).toFixed(0)}%</span>` : '—'}</td>`;
+    }).join('')}
+  </tr>`).join('');
 }
 
 function renderEvolution() {
   const gens = app.evo?.generations || [];
-  if (!gens.length) { mini.empty($('evoChart'), 'No generations yet'); return; }
+  const m = app.model;
+  if (!m) return;
+  const promos = gens.reduce((a, g) => a + (g.report?.linear?.promoted ? 1 : 0) + (g.report?.forest?.promoted ? 1 : 0), 0);
   const last = gens.at(-1);
-  const promotions = gens.reduce((a, g) => a + (g.report.linear.promoted ? 1 : 0) + (g.report.forest.promoted ? 1 : 0), 0);
-  const imp = (r) => r.winner - r.gen0;
-  $('evoStats').innerHTML = `
-    <div class="evo-stat"><span>Generation</span><b>${last.gen}</b><small>${F.dateShort(Date.parse(last.at))} · next ${nextEvolution()}</small></div>
-    <div class="evo-stat"><span>Promotions</span><b>${promotions}</b><small>challengers that won so far</small></div>
-    <div class="evo-stat"><span>vs. generation 0</span><b style="color:${imp(last.report.forest) + imp(last.report.linear) >= 0 ? 'var(--up)' : 'var(--down)'}">${(imp(last.report.forest) >= 0 ? '+' : '') + imp(last.report.forest).toFixed(3)}</b><small>forest R² points · linear ${(imp(last.report.linear) >= 0 ? '+' : '') + imp(last.report.linear).toFixed(3)}</small></div>`;
-  mini.evoChart($('evoChart'), {
-    labels: gens.map((g) => 'G' + g.gen),
-    series: [
-      { name: 'Linear Brain', color: EXCOL.linear, values: gens.map((g) => g.report.linear.winner) },
-      { name: 'Boosted Forest', color: EXCOL.forest, values: gens.map((g) => g.report.forest.winner) },
-      { name: 'Generation-0 settings', color: '#6c7a96', values: gens.map((g) => (g.report.linear.gen0 + g.report.forest.gen0) / 2) },
-    ],
-  });
-  $('evoLegend').innerHTML = `<span><i style="background:${EXCOL.linear}"></i>Linear Brain</span><span><i style="background:${EXCOL.forest}"></i>Boosted Forest</span><span><i style="background:#6c7a96"></i>Gen-0 settings (avg)</span><span>score = out-of-sample R² (%) on the last 5 days</span>`;
-  $('evoLog').innerHTML = [...gens].reverse().slice(0, 30).map((g) => {
-    const r = g.report;
-    const part = (name, x, kind) => `${name}: ${x.promoted ? `<span class="pr">new champion</span> ${x.champion.toFixed(3)} → ${x.winner.toFixed(3)}` : `champion kept at ${x.winner.toFixed(3)}${x.challenger !== null ? ` (best challenger ${x.challenger.toFixed(3)})` : ''}`} <span style="color:var(--text-3)">· ${describeCfg(kind, g.cfg[kind])}</span>`;
-    return `<li><span class="g">Gen ${g.gen}</span><span>${F.dateShort(Date.parse(g.at))} · ${r.linear.candidates + r.forest.candidates} candidates tested<br>${part('Linear', r.linear, 'linear')}<br>${part('Forest', r.forest, 'forest')}</span></li>`;
-  }).join('');
-}
-
-function nextEvolution() {
-  const n = new Date();
-  const ms = Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate() + 1, 0, 5) - n.getTime();
-  return `in ${Math.floor(ms / 3600e3)}h ${Math.floor((ms % 3600e3) / 60e3)}m`;
-}
-
-function renderLearning() {
-  const h = app.learnH;
-  const bt = app.backtest?.days || {};
-  const live = {};
-  for (const m of Object.values(app.months)) Object.assign(live, m.days || {});
-  for (const [d, aggs] of Object.entries(app.sinceByDay)) {
-    live[d] = Object.fromEntries(HORIZONS.map((k) => [k, mergeAgg(live[d]?.[k], aggs[k])]));
+  let txt = `Generation ${m.generation}, trained ${F.ago(Date.parse(m.trainedAt))}. `;
+  txt += promos ? `${promos} challenger${promos === 1 ? ' has' : 's have'} won so far.` : 'No challenger has beaten the launch settings yet.';
+  if (last?.report) {
+    const r = last.report;
+    txt += ` Last tournament: Linear Brain ${r.linear.promoted ? 'replaced' : 'kept'}, Boosted Forest ${r.forest.promoted ? 'replaced' : 'kept'}.`;
   }
-  const days = [...new Set([...Object.keys(bt), ...Object.keys(live)])].sort();
-  if (!days.length) { mini.empty($('learnChart'), 'No scored days yet'); mini.empty($('covChart'), ''); return; }
-  const acc = (a) => (a && a.nm ? a.hit / a.nm : null);
-  const labels = days.map((d) => d.slice(5));
-  mini.lineChart($('learnChart'), {
-    labels,
-    series: [
-      { name: 'backtest', color: HCOL[h], values: days.map((d) => (live[d] ? null : acc(bt[d]?.[h]))), dash: '3 4', opacity: 0.6 },
-      { name: 'live', color: HCOL[h], values: days.map((d) => acc(live[d]?.[h])), width: 2.5 },
-    ],
-    ref: { y: 0.5, label: 'coin flip' },
-    yFmt: (v) => Math.round(v * 100) + '%',
-  });
-  const cov = (a) => (a && a.n ? a.c[1] / a.n : null);
-  mini.lineChart($('covChart'), {
-    labels,
-    series: [
-      { name: 'backtest', color: HCOL[h], values: days.map((d) => (live[d] ? null : cov(bt[d]?.[h]))), dash: '3 4', opacity: 0.6 },
-      { name: 'live', color: HCOL[h], values: days.map((d) => cov(live[d]?.[h])), width: 2.5 },
-    ],
-    yMin: 0.7, yMax: 0.9,
-    ref: { y: 0.8, label: 'target 80%' },
-    yFmt: (v) => Math.round(v * 100) + '%',
-  });
-}
-
-function renderCalibration() {
-  const lc = lastClosedMinute();
-  const edges = [0, 0.47, 0.49, 0.51, 0.53, 1];
-  const bins = [];
-  for (const h of HORIZONS) {
-    const acc = edges.slice(1).map(() => ({ sp: 0, up: 0, n: 0 }));
-    for (let t = lc - 48 * 60 * MINUTE; t <= lc; t += MINUTE) {
-      const o = outcome(t, h);
-      if (!o || o.hit === null) continue;
-      let k = 0;
-      while (k < edges.length - 2 && o.p >= edges[k + 1]) k++;
-      acc[k].sp += o.p; acc[k].up += o.y > 0 ? 1 : 0; acc[k].n++;
-    }
-    for (const b of acc) if (b.n >= 60) bins.push({ p: b.sp / b.n, f: b.up / b.n, n: b.n, color: HCOL[h], label: `${F.horizonLabel(h)}: said ${(b.sp / b.n * 100).toFixed(1)}% up → was up ${(b.up / b.n * 100).toFixed(1)}% of ${b.n}` });
-  }
-  if (!bins.length) { mini.empty($('calChart'), 'Needs a few hours of scored forecasts'); $('calLegend').innerHTML = ''; }
-  else {
-    mini.reliability($('calChart'), { bins, lo: 0.4, hi: 0.6 });
-    $('calLegend').innerHTML = HORIZONS.map((h) => `<span><i style="background:${HCOL[h]}"></i>${F.horizonLabel(h)}</span>`).join('') + '<span>last 48h · bubble size = number of forecasts · bars = ±1σ</span>';
-  }
-  const st = app.engine?.s || app.state;
-  if (!st) return;
-  $('calibParams').innerHTML = HORIZONS.map((h) => {
-    const m80 = Math.exp(st.aci[h][1]);
-    return `<div>${F.horizonLabel(h)} self-correction<b>bands ×${m80.toFixed(2)}</b><b>P(up) slope ${st.platt[h].a.toFixed(2)}</b></div>`;
-  }).join('');
-}
-
-function renderModelCard() {
-  const m = app.model, s = app.status;
-  if (!m || !s) return;
-  const c = m.configs;
-  const cells = [
-    ['Model', `generation ${m.generation} · ${m.id}`],
-    ['Trained', `${new Date(m.trainedAt).toUTCString().replace(' GMT', ' UTC')}`],
-    ['Signals', `${FEATURES.length} features from ADA + BTC 1-minute candles`],
-    ['Linear Brain', describeCfg('linear', c.linear) + ` · groups: ${c.linear.groups.join(', ')}`],
-    ['Boosted Forest', describeCfg('forest', c.forest) + ` · subsample ${c.forest.subsample}`],
-    ['Specialists', Object.entries(c.specialists.lambda).map(([k, v]) => `${k} λ=${Number(v).toExponential(0)}`).join(' · ')],
-    ['Last pipeline run', `${F.ago(Date.parse(s.updatedAt))} · run #${s.run.runs} · ${s.run.replayed} min replayed · ${(s.run.durationMs / 1000).toFixed(0)}s`],
-    ['Checkpoint', `${new Date(s.t + MINUTE).toISOString().slice(0, 16).replace('T', ' ')} UTC`],
-  ];
-  $('modelCard').innerHTML = cells.map(([k, v]) => `<div>${k}<b>${F.esc(v)}</b></div>`).join('');
-}
-
-function renderHowDiagram() {
-  $('howDiagram').innerHTML = `<svg viewBox="0 0 980 230" xmlns="http://www.w3.org/2000/svg" font-family="Inter, sans-serif">
-    <defs>
-      <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#5b8cff"/></marker>
-      <linearGradient id="hg" x1="0" x2="1"><stop offset="0" stop-color="#5b8cff" stop-opacity=".25"/><stop offset="1" stop-color="#2ee6c5" stop-opacity=".18"/></linearGradient>
-    </defs>
-    <g font-size="13" fill="#e8eefb">
-      <rect x="10" y="80" width="150" height="70" rx="14" fill="rgba(255,179,71,.08)" stroke="rgba(255,179,71,.5)"/>
-      <text x="85" y="110" text-anchor="middle" font-weight="600">Binance</text><text x="85" y="130" text-anchor="middle" fill="#a3b1cc" font-size="11.5">public market data</text>
-      <rect x="220" y="60" width="230" height="110" rx="14" fill="url(#hg)" stroke="rgba(91,140,255,.55)"/>
-      <text x="335" y="88" text-anchor="middle" font-weight="600">GitHub Actions</text>
-      <text x="335" y="110" text-anchor="middle" fill="#a3b1cc" font-size="11.5">a few times a day: replay · commit</text>
-      <text x="335" y="128" text-anchor="middle" fill="#a3b1cc" font-size="11.5">daily 00:00 UTC: evolve · retrain</text>
-      <text x="335" y="152" text-anchor="middle" fill="#2ee6c5" font-size="11" font-family="JetBrains Mono">node engine/run.mjs</text>
-      <rect x="510" y="80" width="170" height="70" rx="14" fill="rgba(148,170,220,.06)" stroke="rgba(148,170,220,.35)"/>
-      <text x="595" y="110" text-anchor="middle" font-weight="600">git commit</text><text x="595" y="130" text-anchor="middle" fill="#a3b1cc" font-size="11.5">public, timestamped record</text>
-      <rect x="740" y="80" width="230" height="70" rx="14" fill="rgba(34,227,154,.07)" stroke="rgba(34,227,154,.5)"/>
-      <text x="855" y="108" text-anchor="middle" font-weight="600">GitHub Pages → your browser</text><text x="855" y="128" text-anchor="middle" fill="#a3b1cc" font-size="11.5">same engine, live every minute</text>
-    </g>
-    <g stroke="#5b8cff" stroke-width="1.6" fill="none" marker-end="url(#ah)">
-      <path d="M160 115 H214"/><path d="M450 115 H504"/><path d="M680 115 H734"/>
-      <path d="M85 150 V200 H855 V156" stroke-dasharray="5 5" stroke="#ffb347"/>
-      <path d="M300 60 C300 20, 370 20, 370 56" stroke="#2ee6c5"/>
-    </g>
-    <text x="470" y="218" text-anchor="middle" fill="#ffb347" font-size="11.5">live WebSocket stream, straight to your browser</text>
-    <text x="335" y="18" text-anchor="middle" fill="#2ee6c5" font-size="11.5">self-improvement loop</text>
-  </svg>`;
+  $('evoNote').textContent = txt;
 }
 
 function renderStatic() {
   const s = app.status;
   if (!s) return;
-  $('genBadge').textContent = `Gen ${s.model.generation} · ${F.ago(Date.parse(s.model.trainedAt))}`;
-  $('liveSince').textContent = s.liveSince ? F.dateShort(Date.parse(s.liveSince)) : '—';
-  renderCounts();
-  // The page never waits for GitHub: it recomputes everything since the last commit. Only a
-  // gap longer than the browser can replay (about 4 days) is worth a warning.
-  const stale = Date.now() - Date.parse(s.updatedAt) > 3 * 86400e3;
   const banner = $('banner');
-  if (!app.marketOk) {
+  const stale = Date.now() - Date.parse(s.updatedAt) > 12 * 3600e3;
+  if (!app.marketOk && app.marketTried) {
     banner.hidden = false;
     banner.textContent = 'The live Binance feed is not reachable from your network, so this page shows the last committed record.';
   } else if (stale) {
     banner.hidden = false;
-    banner.textContent = `The official record was last committed ${F.ago(Date.parse(s.updatedAt))}, much longer ago than usual. The forecasts and scores on this page are still live.`;
+    banner.textContent = `GitHub last committed the official record ${F.ago(Date.parse(s.updatedAt))}. The forecasts and scores on this page are still computed live.`;
   } else banner.hidden = true;
   renderEvolution();
-  renderModelCard();
-  renderLearning();
-}
-
-function renderCounts() {
-  const s = app.status;
-  if (!s) return;
-  const since = HORIZONS.reduce((a, h) => a + app.sinceCkpt[h].n, 0);
-  const scored = HORIZONS.reduce((a, h) => a + (s.totals?.all?.[h]?.n || 0), 0) + since;
-  $('madeCount').textContent = F.num(scored);
-  const ago = F.ago(Date.parse(s.updatedAt));
-  $('lastUpdate').textContent = `record committed ${ago}`;
-  $('recordNote').innerHTML = app.marketOk
-    ? `Complete up to this minute. GitHub last committed the official record <b>${ago}</b>; the <b>${F.num(since)}</b> forecasts checked since then were scored here in your browser with the same code and data, exactly as they will be recorded.`
-    : `From the official record, committed <b>${ago}</b>.`;
 }
 
 function renderMinute() {
   trim();
-  renderCounts();
-  renderCards();
+  renderPrice();
+  renderForecasts();
   renderChart();
-  renderScoreboard();
-  renderFeed();
+  renderScores();
+  renderLog();
   renderCouncil();
-  renderCalibration();
 }
 
 function tick() {
-  const tNow = now();
-  const next = Math.ceil(tNow / MINUTE) * MINUTE;
-  $('nextTick').textContent = F.countdown(next - tNow);
-  renderCards();
-  renderChart();
+  renderForecasts();
 }
 
-// ---------------------------------------------------------------- UI wiring
+// ---------------------------------------------------------------- boot
 
-function setSeg(id, attr, val) {
-  for (const b of $(id).querySelectorAll('button')) b.classList.toggle('on', b.dataset[attr] === String(val));
-}
-
-function wire() {
-  const gh = `https://github.com/${repo}`;
-  $('ghLink').href = gh;
-  $('repoLink').href = gh;
-  $('dataLink').href = `${gh}/tree/main/data`;
-  $('csvLink').href = `${gh}/tree/main/data/predictions`;
-  $('actionsLink').href = `${gh}/actions`;
-  const selectH = (h) => {
-    app.selH = h;
-    setSeg('hSeg', 'h', h);
-    $('headH').textContent = h >= 60 ? 'an hour' : `${h} minutes`;
-    $('corrH').textContent = h >= 60 ? '1 hour' : `${h} minutes`;
-    renderCards();
-    renderChart();
-  };
-  $('hSeg').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) selectH(Number(b.dataset.h)); });
-  $('forecastCards').addEventListener('click', (e) => { const c = e.target.closest('.fc'); if (c?.dataset.h) selectH(Number(c.dataset.h)); });
-  $('rSeg').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; app.range = Number(b.dataset.r); setSeg('rSeg', 'r', app.range); renderChart(); });
-  $('cSeg').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; app.councilH = Number(b.dataset.h); setSeg('cSeg', 'h', app.councilH); renderCouncil(); });
-  $('lSeg').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; app.learnH = Number(b.dataset.h); setSeg('lSeg', 'h', app.learnH); renderLearning(); });
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) { catchUp(); pollStatus(); } });
-  chart = new ForecastChart($('chart'), { tip: $('tip'), dot: $('nowDot'), strip: $('strip') });
-  renderHowDiagram();
-}
-
-async function boot() {
-  wire();
-  try {
-    await loadPublished();
-  } catch (e) {
-    $('chartLoading').textContent = 'Could not load the published model. Please retry in a minute.';
-    console.error(e);
-    return;
-  }
-  renderStatic();
+// Load recent candles and go live; if Binance is unreachable or rate-limits us, keep showing
+// the published record and try again with a growing pause.
+async function startLive(attempt = 0) {
   try {
     clockOffset = await serverClockOffset().catch(() => 0);
     const lc = lastClosedMinute();
-    const from = Math.max(Math.min(lc - 1500 * MINUTE, app.state.t - (WARMUP + 10) * MINUTE), lc - 5800 * MINUTE);
-    await loadCandles(from);
+    const from = Math.max(Math.min(lc - 1500 * MINUTE, app.state.t - (WARMUP + 10) * MINUTE), lc - 3 * 1440 * MINUTE - (WARMUP + 10) * MINUTE);
+    const [fng] = await Promise.all([fetchFearGreed(`data/fng.json?v=${app.status.t}`), loadCandles(from)]);
+    app.fng = fng;
     rebuildEngine();
     startStream();
   } catch (e) {
     console.warn('live market data unavailable', e);
     app.marketOk = false;
-    const last = [...app.csvClose.entries()].at(-1);
-    if (last) app.price = last[1];
-    $('livePill').classList.add('warn');
-    $('liveText').textContent = 'offline';
+    $('liveState').className = 'live warn';
+    $('liveState').textContent = 'offline, retrying';
+    setTimeout(() => startLive(attempt + 1), Math.min(300e3, 20e3 * 2 ** attempt));
   }
+  app.marketTried = true;
   renderStatic();
-  renderPrice();
   renderMinute();
+}
+
+async function boot() {
+  const gh = `https://github.com/${repo}`;
+  $('ghLink').href = gh;
+  $('csvLink').href = `${gh}/tree/main/data/predictions`;
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { catchUp(); pollStatus(); } });
+  let resizeT = 0;
+  addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(renderChart, 150); });
+  try {
+    await loadPublished();
+  } catch (e) {
+    $('forecasts').innerHTML = '<div class="fc"><p class="eyebrow">Could not load the published model. Please retry in a minute.</p></div>';
+    console.error(e);
+    return;
+  }
+  // show the published forecast and record straight away; live data refines it when it arrives
+  app.price = [...app.csvClose.entries()].sort((a, b) => a[0] - b[0]).at(-1)?.[1] ?? null;
+  renderStatic();
+  renderMinute();
+  await startLive();
   setInterval(tick, 1000);
-  setInterval(pollStatus, 60_000);
-  setInterval(() => { renderStatic(); }, 60_000);
+  setInterval(pollStatus, 120_000);
+  setInterval(renderStatic, 60_000);
 }
 
 boot();

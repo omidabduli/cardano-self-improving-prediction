@@ -1,6 +1,6 @@
 name: Learn & publish
 
-# Replay every minute since the last run with the published model, score the forecasts that
+# Replay every minute since the last run with the published model (a forecast every 15 minutes), score the forecasts that
 # matured, update the online learners, commit the public record and redeploy Pages. Once per
 # UTC day the same run also evolves and retrains the experts.
 #

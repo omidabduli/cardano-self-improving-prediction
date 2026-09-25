@@ -6,11 +6,11 @@ import { HORIZONS } from './config.js';
 
 export const EXPERTS = [
   { id: 'rw', name: 'The Skeptic', role: 'Random walk: always says "no change". The baseline every other expert must beat.', icon: 'skeptic' },
-  { id: 'micro', name: 'Order-Flow Reader', role: 'Reads the last minutes of buying/selling pressure and bid-ask bounce.', icon: 'micro' },
-  { id: 'btc', name: 'Bitcoin Watcher', role: 'Bets that ADA catches up with moves Bitcoin just made.', icon: 'btc' },
-  { id: 'swing', name: 'Trend Surfer', role: 'Momentum and reversal over 5 minutes to 4 hours.', icon: 'swing' },
-  { id: 'linear', name: 'Linear Brain', role: 'Regularised regression on all 36 signals. Its settings are evolved daily.', icon: 'linear' },
-  { id: 'forest', name: 'Boosted Forest', role: 'Gradient-boosted decision trees that find non-linear patterns. Evolved daily.', icon: 'forest' },
+  { id: 'swing', name: 'Trend Reader', role: 'Momentum and reversal from 15 minutes to 3 days, and where the price sits in its recent range.', icon: 'swing' },
+  { id: 'btc', name: 'Market Watcher', role: 'Bets that ADA catches up with moves Bitcoin and Ethereum just made.', icon: 'btc' },
+  { id: 'crowd', name: 'Crowd Reader', role: 'Buying and selling pressure, trading activity and the crypto Fear & Greed index.', icon: 'micro' },
+  { id: 'linear', name: 'Linear Brain', role: 'Regularised regression on the signal groups evolution picked (at launch: price, Bitcoin, Ethereum). Evolved daily.', icon: 'linear' },
+  { id: 'forest', name: 'Boosted Forest', role: 'Gradient-boosted decision trees that look for non-linear patterns in the same signals. Evolved daily.', icon: 'forest' },
 ];
 export const EXPERT_IDS = EXPERTS.map((e) => e.id);
 
