@@ -2,7 +2,7 @@
 // checkpoint with the same engine the backend uses, then keeps stepping on the live Binance
 // stream. Every forecast and score on the page is computed here, in the browser.
 
-import { HORIZONS, MINUTE, CADENCE, SYMBOL, BTC_SYMBOL, ETH_SYMBOL, STRONG_EDGE, isIssue } from '../core/config.js';
+import { HORIZONS, MINUTE, CADENCE, SYMBOL, BTC_SYMBOL, ETH_SYMBOL, isIssue } from '../core/config.js';
 import { buildSeries, indexOf } from '../core/candles.js';
 import { computeFeatures, D, WARMUP } from '../core/features.js';
 import { expertPredictions, EXPERTS } from '../core/models.js';
@@ -251,22 +251,17 @@ function forecastBox(pred, h, t0, tNow) {
   const live = Number.isFinite(app.price) ? app.price : null;
   const a = Math.min(lo, c, live ?? c), b = Math.max(hi, c, live ?? c), pad = (b - a) * 0.08 || c * 0.001;
   const pos = (v) => (((v - (a - pad)) / (b - a + 2 * pad)) * 100).toFixed(1);
-  const pUp = x.p, edge = Math.abs(pUp - 0.5);
-  const call = edge >= STRONG_EDGE ? `<span class="status ${pUp >= 0.5 ? 'up' : 'down'}">leans ${pUp >= 0.5 ? 'up' : 'down'}</span>` : '<span class="status planned">no clear direction</span>';
   return `<div class="fc">
-    <p class="eyebrow">In ${H_NAME[h]} · ${h >= 1440 ? F.dateShort(due) + ' ' : ''}${F.hhmm(due)}</p>
-    <p class="fc-head"><span class="fc-chg ${dir}">${arrow} ${flat ? '\u00b10.00%' : pctText(chg)}</span><span class="fc-price">${F.price(med, 4)}</span></p>
+    <h3 class="fc-h">In ${H_NAME[h]}</h3>
+    <p class="fc-head"><span class="fc-price">${F.price(med, 4)}</span><span class="fc-chg ${dir}">${arrow} ${flat ? '\u00b10.00%' : pctText(chg)}</span></p>
     <p class="fc-words">${words} ${F.price(c, 4)} at ${F.hhmm(t0)}</p>
-    <div class="fc-bar" role="img" aria-label="80% range ${F.price(lo, 4)} to ${F.price(hi, 4)}, now ${F.price(c, 4)}, estimate ${F.price(med, 4)}">
+    <div class="fc-bar" role="img" aria-label="80% range ${F.price(lo, 4)} to ${F.price(hi, 4)}, estimate ${F.price(med, 4)}">
       <i class="band" style="left:${pos(lo)}%;width:${(pos(hi) - pos(lo)).toFixed(1)}%"></i>
       <i class="now" style="left:${pos(c)}%" title="${F.price(c, 4)} at ${F.hhmm(t0)}"></i>
       ${live !== null && Math.abs(live / c - 1) > 0.0002 ? `<i class="cur" style="left:${pos(live)}%" title="now ${F.price(live, 4)}"></i>` : ''}
       <i class="est ${dir}" style="left:${pos(med)}%"></i>
     </div>
     <p class="fc-range"><span>${F.price(lo, 4)} <b class="down">${pctText(loChg, 1)}</b></span><span>80% range</span><span>${F.price(hi, 4)} <b class="up">${pctText(hiChg, 1)}</b></span></p>
-    <div class="fc-odds"><span class="odds"><i class="up" style="width:${(pUp * 100).toFixed(1)}%"></i><i class="down" style="width:${((1 - pUp) * 100).toFixed(1)}%"></i></span>
-      <p><span>Up <b class="mono">${(pUp * 100).toFixed(1)}%</b> · Down <b class="mono">${((1 - pUp) * 100).toFixed(1)}%</b></span>${call}</p></div>
-    <p class="fc-due">Checked in ${F.countdown(due - tNow)}</p>
   </div>`;
 }
 
@@ -279,7 +274,7 @@ function renderForecasts() {
   const current = pred && issuedAt(pred.t) > tNow - CADENCE * MINUTE;
   if (!current && !(pred && app.marketTried && !app.marketOk)) {
     $('forecasts').innerHTML = HORIZONS.map((h) => `<div class="fc">
-      <p class="eyebrow">In ${H_NAME[h]}</p>
+      <h3 class="fc-h">In ${H_NAME[h]}</h3>
       <p class="fc-head"><span class="fc-wait">calculating…</span></p>
       <p class="fc-due">${app.marketTried ? 'Waiting for the next forecast' : 'Reading the live market'}</p>
     </div>`).join('');
@@ -328,9 +323,10 @@ function renderScores() {
     if (!s) return `<tr><td class="h">${H_SHORT[h]}</td><td colspan="4">No forecast has reached its time yet. The first ${H_NAME[h]} forecast is checked ${H_NAME[h]} after launch.</td></tr>`;
     const dir = a.ni ? `${(a.hi / a.ni * 100).toFixed(1)}%` : '—';
     const z = s.ni >= 10 ? `z = ${s.zscore.toFixed(1)} vs. a coin flip` : 'too few to judge yet';
+    const goal = h === 60 ? ' · goal 54%' : '';
     return `<tr>
       <td class="h">${H_SHORT[h]}</td>
-      <td class="big">${dir}<small>${F.num(s.ni)} independent · ${z}</small></td>
+      <td class="big">${dir}<small>${F.num(s.ni)} independent · ${z}${goal}</small></td>
       <td class="big">${(s.cov[1] * 100).toFixed(1)}%<small>of ${F.num(s.n)} forecasts</small></td>
       <td class="big">${(s.mae * 100).toFixed(2)}%<small>"no change": ${(s.mae0 * 100).toFixed(2)}%</small></td>
       <td class="num">${F.num(s.n)}</td>

@@ -84,7 +84,7 @@ section.alt{background:var(--surface)}
 .live.on::before{background:var(--sea)}
 .live.warn::before{background:var(--clay)}
 .now{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 20px;margin-top:48px}
-.now-price{font-family:var(--serif);font-weight:300;font-size:clamp(36px,4.6vw,48px);line-height:1;font-variant-numeric:tabular-nums}
+.now-price{font-family:var(--serif);font-weight:300;font-size:clamp(44px,5.6vw,64px);line-height:1;font-variant-numeric:tabular-nums}
 .now-meta{font-family:var(--mono);font-size:13px;color:var(--muted)}
 .facts{display:flex;flex-wrap:wrap;gap:8px 20px;margin-top:20px;font-size:14px;color:var(--muted)}
 .facts b{font-weight:500;color:var(--ink-2);font-variant-numeric:tabular-nums}
@@ -94,11 +94,12 @@ section.alt{background:var(--surface)}
 .forecasts{display:grid;grid-template-columns:repeat(3,1fr);margin-top:28px;border-block:1px solid var(--line)}
 .fc{padding:28px 24px 28px 0;min-width:0}
 .fc + .fc{padding-left:24px;border-left:1px solid var(--line)}
-.fc-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 12px;margin-top:14px}
+.fc-h{font-size:22px;line-height:1.2;color:var(--ink)}
+.fc-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 14px;margin-top:10px}
+.fc-price{font-family:var(--serif);font-weight:300;font-size:clamp(36px,4vw,46px);line-height:1;color:var(--ink);font-variant-numeric:tabular-nums}
 .fc-chg{font-family:var(--mono);font-size:17px;font-weight:500;font-variant-numeric:tabular-nums}
-.fc-price{font-family:var(--serif);font-weight:400;font-size:24px;line-height:1.1;color:var(--ink-2);font-variant-numeric:tabular-nums}
-.fc-wait{font-family:var(--serif);font-size:24px;color:var(--muted);font-style:italic}
-.fc-words{margin-top:4px;font-size:14px;color:var(--ink-2)}
+.fc-wait{font-family:var(--serif);font-size:clamp(28px,3vw,36px);line-height:1;color:var(--muted);font-style:italic}
+.fc-words{margin-top:8px;font-size:14px;color:var(--ink-2)}
 .up{color:var(--up)} .down{color:var(--down)} .flat{color:var(--muted)}
 .fc-bar{position:relative;height:18px;margin-top:16px}
 .fc-bar i{position:absolute;top:50%;display:block}
@@ -109,11 +110,6 @@ section.alt{background:var(--surface)}
 .fc-range{display:flex;justify-content:space-between;gap:8px;margin-top:6px;font-family:var(--mono);font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
 .fc-range b{font-weight:400}
 .fc-range span{white-space:nowrap}
-.fc-odds{margin-top:16px}
-.odds{display:flex;height:4px;border-radius:2px;overflow:hidden;background:var(--line)}
-.odds i{display:block;height:100%}
-.odds .up{background:var(--up)} .odds .down{background:var(--down);opacity:.75}
-.fc-odds p{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:6px 8px;margin-top:8px;font-size:13px;color:var(--ink-2)}
 .fc-legend{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:14px;font-size:12px;color:var(--muted)}
 .fc-legend i{display:inline-block;vertical-align:-1px;margin-right:6px}
 .lg-now{width:2px;height:12px;background:var(--ink)}
