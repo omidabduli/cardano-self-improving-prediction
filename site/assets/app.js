@@ -231,13 +231,43 @@ function renderPrice() {
   document.title = `$${app.price.toFixed(4)} ADA · ADAptive`;
 }
 
-function direction(p) {
-  const edge = Math.abs(p - 0.5);
-  const word = p >= 0.5 ? 'up' : 'down';
-  const pill = edge >= STRONG_EDGE
-    ? `<span class="status active">leans ${word}</span>`
-    : '<span class="status planned">no clear direction</span>';
-  return `<span>${word === 'up' ? 'Up' : 'Down'} <b class="mono">${(Math.max(p, 1 - p) * 100).toFixed(1)}%</b></span>${pill}`;
+const pctText = (r, d = 2) => `${r > 0 ? '+' : r < 0 ? '\u2212' : '\u00b1'}${Math.abs(r * 100).toFixed(d)}%`;
+
+// One forecast box: the expected change in words and colour, the likely range as a small bar,
+// and the chance of going up. Colour is never the only signal: arrows and words say it too.
+function forecastBox(pred, h, t0, tNow) {
+  const x = pred.h[h];
+  const due = t0 + h * MINUTE;
+  const c = pred.c;
+  const med = c * Math.exp(x.med ?? x.ret), lo = c * Math.exp(x.lo80), hi = c * Math.exp(x.hi80);
+  const chg = med / c - 1, loChg = lo / c - 1, hiChg = hi / c - 1;
+  const flat = Math.abs(chg) < 0.00005; // rounds to ±0.00%
+  const dir = flat ? 'flat' : chg > 0 ? 'up' : 'down';
+  const arrow = flat ? '\u2248' : dir === 'up' ? '\u25b2' : '\u25bc';
+  // how big the expected move is compared with how far the price could go
+  const rel = Math.abs(chg) / Math.max(1e-9, (hiChg - loChg) / 2);
+  const words = rel < 0.05 ? 'About the same as' : `${rel < 0.25 ? 'Slightly ' : ''}${chg > 0 ? 'higher' : 'lower'} than`;
+  // range bar: the 80% range, the start price (tick), the live price (ring) and the estimate (dot)
+  const live = Number.isFinite(app.price) ? app.price : null;
+  const a = Math.min(lo, c, live ?? c), b = Math.max(hi, c, live ?? c), pad = (b - a) * 0.08 || c * 0.001;
+  const pos = (v) => (((v - (a - pad)) / (b - a + 2 * pad)) * 100).toFixed(1);
+  const pUp = x.p, edge = Math.abs(pUp - 0.5);
+  const call = edge >= STRONG_EDGE ? `<span class="status ${pUp >= 0.5 ? 'up' : 'down'}">leans ${pUp >= 0.5 ? 'up' : 'down'}</span>` : '<span class="status planned">no clear direction</span>';
+  return `<div class="fc">
+    <p class="eyebrow">In ${H_NAME[h]} · ${h >= 1440 ? F.dateShort(due) + ' ' : ''}${F.hhmm(due)}</p>
+    <p class="fc-head"><span class="fc-chg ${dir}">${arrow} ${flat ? '\u00b10.00%' : pctText(chg)}</span><span class="fc-price">${F.price(med, 4)}</span></p>
+    <p class="fc-words">${words} ${F.price(c, 4)} at ${F.hhmm(t0)}</p>
+    <div class="fc-bar" role="img" aria-label="80% range ${F.price(lo, 4)} to ${F.price(hi, 4)}, now ${F.price(c, 4)}, estimate ${F.price(med, 4)}">
+      <i class="band" style="left:${pos(lo)}%;width:${(pos(hi) - pos(lo)).toFixed(1)}%"></i>
+      <i class="now" style="left:${pos(c)}%" title="${F.price(c, 4)} at ${F.hhmm(t0)}"></i>
+      ${live !== null && Math.abs(live / c - 1) > 0.0002 ? `<i class="cur" style="left:${pos(live)}%" title="now ${F.price(live, 4)}"></i>` : ''}
+      <i class="est ${dir}" style="left:${pos(med)}%"></i>
+    </div>
+    <p class="fc-range"><span>${F.price(lo, 4)} <b class="down">${pctText(loChg, 1)}</b></span><span>80% range</span><span>${F.price(hi, 4)} <b class="up">${pctText(hiChg, 1)}</b></span></p>
+    <div class="fc-odds"><span class="odds"><i class="up" style="width:${(pUp * 100).toFixed(1)}%"></i><i class="down" style="width:${((1 - pUp) * 100).toFixed(1)}%"></i></span>
+      <p><span>Up <b class="mono">${(pUp * 100).toFixed(1)}%</b> · Down <b class="mono">${((1 - pUp) * 100).toFixed(1)}%</b></span>${call}</p></div>
+    <p class="fc-due">Checked in ${F.countdown(due - tNow)}</p>
+  </div>`;
 }
 
 // A forecast is current until the next one is due. An older one is never shown as if it were
@@ -250,25 +280,14 @@ function renderForecasts() {
   if (!current && !(pred && app.marketTried && !app.marketOk)) {
     $('forecasts').innerHTML = HORIZONS.map((h) => `<div class="fc">
       <p class="eyebrow">In ${H_NAME[h]}</p>
-      <span class="fc-price fc-wait">calculating…</span>
+      <p class="fc-head"><span class="fc-wait">calculating…</span></p>
       <p class="fc-due">${app.marketTried ? 'Waiting for the next forecast' : 'Reading the live market'}</p>
     </div>`).join('');
     $('issueLine').innerHTML = '<span>A new forecast is made at :00, :15, :30 and :45</span>';
     return;
   }
   const t0 = issuedAt(pred.t);
-  $('forecasts').innerHTML = HORIZONS.map((h) => {
-    const x = pred.h[h];
-    const due = t0 + h * MINUTE;
-    const med = pred.c * Math.exp(x.med ?? x.ret);
-    return `<div class="fc">
-      <p class="eyebrow">In ${H_NAME[h]} · ${h >= 1440 ? F.dateShort(due) + ' ' : ''}${F.hhmm(due)}</p>
-      <span class="fc-price">${F.price(med, 4)}</span>
-      <p class="fc-range">80% range ${F.price(pred.c * Math.exp(x.lo80), 4)} – ${F.price(pred.c * Math.exp(x.hi80), 4)}</p>
-      <p class="fc-dir">${direction(x.p)}</p>
-      <p class="fc-due">Checked in ${F.countdown(due - tNow)}</p>
-    </div>`;
-  }).join('');
+  $('forecasts').innerHTML = HORIZONS.map((h) => forecastBox(pred, h, t0, tNow)).join('');
   const next = issuedAt(pred.t) + CADENCE * MINUTE;
   const committed = app.status ? F.ago(Date.parse(app.status.updatedAt)) : '—';
   const stale = issuedAt(pred.t) <= tNow - CADENCE * MINUTE;
