@@ -20,7 +20,7 @@ And honestly, there is a joy in it that is hard to describe. When you build a mo
 
 Every 15 minutes (at :00, :15, :30 and :45 UTC) it publishes three forecasts: ADA in 1 hour, 3 hours and 24 hours. Each one has a price, an 80% range and a probability that the price will be higher. Every forecast is committed to this repository before the outcome is known, and checked when its time comes.
 
-There is no server. When you open the page, your browser runs the published model on the live Binance feed and computes every forecast and every score up to the current minute. A GitHub Actions job is the notary: a few times a day it replays the same minutes with the same code and commits the official record. I checked that both give the same numbers, to the last digit.
+There is no server. When you open the page, your browser runs the published model on the live Binance feed and computes every forecast and every score up to the current minute. A GitHub Actions job is the notary: every 15 minutes it replays the same minutes with the same code and commits the official record. GitHub's own timer only fires a few times a day, so a free [cron-job.org](https://cron-job.org) job starts it at minute 1, 16, 31 and 46 of every hour. I checked that the browser and the record give the same numbers, to the last digit.
 
 ## What I found (the realistic part)
 
