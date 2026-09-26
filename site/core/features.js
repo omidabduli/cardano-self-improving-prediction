@@ -10,9 +10,9 @@ import { TICK } from './config.js';
 export const GROUPS = {
   // Momentum / reversal from 15 minutes to 3 days
   trend: ['r15', 'r60', 'r180', 'r360', 'r720', 'r1440', 'r2880', 'r4320'],
-  // Bitcoin: its own moves and how far ADA lags behind them
+  // Lead coin (config LEAD_SYMBOL, Bitcoin): its own moves and how far ADA lags behind them
   btc: ['rb60', 'rb360', 'rb1440', 'res60', 'res360', 'res1440'],
-  // Ethereum, the other large-cap driver
+  // Peer coin (config PEER_SYMBOL, Ethereum), the other large-cap driver
   eth: ['re60', 're360', 'res_e360', 'res_e1440'],
   // Where the price sits inside its recent high-low range, and against its VWAP
   range: ['rng60', 'rng360', 'rng1440', 'rng4320', 'vw360', 'vw1440'],
@@ -24,11 +24,16 @@ export const GROUPS = {
   time: ['tod_s', 'tod_c', 'dow_s', 'dow_c'],
   // Market-wide sentiment: the daily crypto Fear & Greed index (alternative.me)
   sentiment: ['fng', 'fng7'],
+  // Short-term moves of the coin and of the lead and peer coins (direction model)
+  short: ['r1', 'r5', 'lead5', 'lead15', 'peer5', 'peer15', 'upfrac15', 'rb5'],
+  // Slower context: volume-confirmed moves, share of up-minutes, the week's rhythm, distance
+  // from the 24 h high, the week's trend and momentum acceleration (direction model)
+  context: ['volsign15', 'upfrac60', 'wkend', 'how_s', 'how_c', 'gap_hi1440', 'r10080', 'mom_accel'],
 };
 export const GROUP_NAMES = Object.keys(GROUPS);
 export const FEATURES = GROUP_NAMES.flatMap((g) => GROUPS[g]);
 export const D = FEATURES.length;
-export const WARMUP = 4321; // minutes of history needed before the first valid feature row (3 days)
+export const WARMUP = 10081; // minutes of history needed before the first valid feature row (7 days)
 
 export function featureIndices(groups) {
   const out = [];
@@ -78,6 +83,7 @@ export function computeFeatures(S, from = WARMUP, step = 1) {
   const pN = pre((i) => S.tr[i]);
   const pBV = pre((i) => S.bv[i]);
   const pBF = pre((i) => 2 * S.btb[i] - S.bv[i]);
+  const pUp = pre((i) => (i && S.c[i] > S.c[i - 1] ? 1 : 0));
   const sum = (p, i, w) => p[i + 1] - p[i + 1 - w];
   const flow = (pf, pv, i, w) => { const vv = sum(pv, i, w); return vv > 0 ? sum(pf, i, w) / vv : 0; };
 
@@ -130,6 +136,22 @@ export function computeFeatures(S, from = WARMUP, step = 1) {
     // sentiment (each value only from the minute it was public; see candles.buildSeries)
     X[k++] = S.fg[i] / 50 - 1;
     X[k++] = (S.fg[i] - S.fg7[i]) / 50;
+    // short
+    X[k++] = r(1); X[k++] = r(5);
+    X[k++] = rb(5) - r(5); X[k++] = rb(15) - r(15);
+    X[k++] = re(5) - r(5); X[k++] = re(15) - r(15);
+    X[k++] = sum(pUp, i, 15) / 15 - 0.5;
+    X[k++] = rb(5);
+    // context (Monday = 0 for the weekend flag; hour of week as a cycle)
+    const v15 = sum(pV, i, 15) / 15, v1440 = sum(pV, i, 1440) / 1440;
+    X[k++] = Math.sign(r(15)) * Math.log((v15 + 1e-9) / (v1440 + 1e-9));
+    X[k++] = sum(pUp, i, 60) / 60 - 0.5;
+    X[k++] = Math.floor((mins / 1440 + 3) % 7) >= 5 ? 1 : 0;
+    const how = ((((mins / 1440 + 3) % 7) * 1440 + (mins % 1440)) / 10080) * 2 * Math.PI;
+    X[k++] = Math.sin(how); X[k++] = Math.cos(how);
+    X[k++] = Math.log(c / hiW[2][i]) / (vo * Math.sqrt(1440));
+    X[k++] = r(10080);
+    X[k++] = r(60) - r(360);
   }
   return { X, vol, D };
 }

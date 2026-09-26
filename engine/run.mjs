@@ -2,7 +2,7 @@
 // The pipeline GitHub Actions runs whenever its schedule fires (in practice a few times a day;
 // the site doesn't depend on it, because the browser computes everything live).
 //
-//   1. fetch the newest 1-minute candles (ADA + BTC)
+//   1. fetch the newest 1-minute candles (ADA + BTC + ETH)
 //   2. replay every minute since the last checkpoint with the *published* model:
 //      make the official prediction, resolve the ones that matured, learn online
 //   3. once per UTC day: evolve challengers vs. champions, retrain all experts
@@ -10,10 +10,10 @@
 //
 // Flags: --bootstrap (start from scratch)  --evolve (force a retrain now)  --warmup-days N
 
-import { MINUTE, DAY_MIN, HORIZONS, SYMBOL, BTC_SYMBOL, ETH_SYMBOL, isIssue } from '../site/core/config.js';
+import { MINUTE, DAY_MIN, HORIZONS, SYMBOL, LEAD_SYMBOL, PEER_SYMBOL, isIssue } from '../site/core/config.js';
 import { buildSeries, indexOf } from '../site/core/candles.js';
 import { D, WARMUP } from '../site/core/features.js';
-import { expertPredictions, EXPERTS } from '../site/core/models.js';
+import { expertPredictions, directionScores, EXPERTS } from '../site/core/models.js';
 import { Engine } from '../site/core/engine.js';
 import { emptyHorizonAggs, addResolution, mergeAgg, roundAgg } from '../site/core/metrics.js';
 import { fetchKlines, fetchFearGreed, lastHost } from './binance.mjs';
@@ -25,7 +25,7 @@ const args = process.argv.slice(2);
 const flag = (f) => args.includes(f);
 const opt = (f, d) => { const i = args.indexOf(f); return i >= 0 ? Number(args[i + 1]) : d; };
 const log = (...a) => console.log(...a);
-const FETCH_DAYS_TRAIN = 77; // 60-day max window + 10 validation days + 1-day targets + 3-day warm-up + margin
+const FETCH_DAYS_TRAIN = 262; // 240-day direction window + 10 validation days + 1-day targets + 7-day warm-up + margin
 const WARMUP_DAYS = opt('--warmup-days', 30);
 // how far back one run can backfill if GitHub didn't run the job for a while
 const REPLAY_DAYS = 7;
@@ -43,10 +43,10 @@ function siteVersion() {
 
 function csvRow(t, close, pred) {
   const base = `${isoMinute(t)},${close}`;
-  if (!pred) return base + ','.repeat(12);
+  if (!pred) return base + ','.repeat(5 * HORIZONS.length);
   return base + ',' + HORIZONS.map((h) => {
     const x = pred.h[h];
-    return [bps(x.ret, 2), x.p.toFixed(4), bps(x.lo[1], 1), bps(x.hi[1], 1)].join(',');
+    return [bps(x.ret, 2), x.p.toFixed(4), bps(x.lo[1], 1), bps(x.hi[1], 1), x.strong ? 1 : 0].join(',');
   }).join(',');
 }
 
@@ -77,19 +77,19 @@ async function main() {
   // bootstrap also simulates WARMUP_DAYS before today, each with a full training window
   const fromMs = needTrain
     ? lastClosed - (FETCH_DAYS_TRAIN + (bootstrap ? WARMUP_DAYS : 0)) * DAY_MIN * MINUTE
-    : Math.max(state.t - (WARMUP + 5) * MINUTE, lastClosed - REPLAY_DAYS * DAY_MIN * MINUTE);
+    : Math.max(state.t, lastClosed - REPLAY_DAYS * DAY_MIN * MINUTE) - (WARMUP + 5) * MINUTE; // + the features' warm-up
   const tf = Date.now();
   const [ada, btc, eth, fng] = await Promise.all([
     fetchKlines(SYMBOL, fromMs, lastClosed),
-    fetchKlines(BTC_SYMBOL, fromMs, lastClosed),
-    fetchKlines(ETH_SYMBOL, fromMs, lastClosed),
+    fetchKlines(LEAD_SYMBOL, fromMs, lastClosed),
+    fetchKlines(PEER_SYMBOL, fromMs, lastClosed),
     fetchFearGreed(Math.ceil((lastClosed - fromMs) / 86400000) + 10, readJSON('fng.json', [])),
   ]);
   if (!ada.length || !btc.length || !eth.length) throw new Error('no candles returned');
   const end = Math.min(...[ada, btc, eth].map((a) => a.reduce((m, k) => Math.max(m, k.t), 0)));
   const S = buildSeries(ada, btc, end, { eth, fng });
   const ds = makeDataset(S);
-  log(`data: ${ada.length} ADA + ${btc.length} BTC + ${eth.length} ETH candles via ${lastHost}, ${fng.length} Fear & Greed days, in ${Date.now() - tf} ms; series ${isoMinute(S.t[0])} .. ${isoMinute(S.t[S.t.length - 1])}`);
+  log(`data: ${ada.length} ${SYMBOL} + ${btc.length} ${LEAD_SYMBOL} + ${eth.length} ${PEER_SYMBOL} candles via ${lastHost}, ${fng.length} Fear & Greed days, in ${Date.now() - tf} ms; series ${isoMinute(S.t[0])} .. ${isoMinute(S.t[S.t.length - 1])}`);
 
   const history = { newAggs: {} };
   let rowsOut = [];
@@ -107,8 +107,9 @@ async function main() {
     }
     if (i0 >= 0) {
       for (let i = Math.max(i0, 0); i < S.t.length; i++) {
-        const mus = i >= WARMUP && isIssue(S.t[i]) ? expertPredictions(model, ds.X, D, i) : null;
-        const { resolved, pred } = eng.step(S.t[i], S.c[i], ds.vol[i], mus);
+        const issue = i >= WARMUP && isIssue(S.t[i]);
+        const mus = issue ? expertPredictions(model, ds.X, D, i) : null;
+        const { resolved, pred } = eng.step(S.t[i], S.c[i], ds.vol[i], mus, issue ? directionScores(model, ds.X, D, i) : null);
         if (isIssue(S.t[i])) rowsOut.push(csvRow(S.t[i], S.c[i], pred));
         for (const r of resolved) {
           const dk = isoDay(r.t);
@@ -154,7 +155,7 @@ async function main() {
         const pStats = Object.fromEntries(HORIZONS.map((h) => [h, [0.5, 0.8, 0.95].map((q) => Number(quant(wu.pAbs[h], q).toFixed(4)))]));
         const days = {};
         for (const [dk, a] of Object.entries(wu.byDay)) days[dk] = Object.fromEntries(HORIZONS.map((h) => [h, roundAgg(a[h])]));
-        writeJSON('backtest.json', { note: 'Walk-forward simulation run once at launch: each day the experts were refit on earlier data only, then the full online system (ensemble weights, conformal bands, calibration) was stepped minute by minute. The generation-0 settings were chosen in a longer walk-forward test that overlaps these days, so treat this as slightly optimistic. The live record is what counts.', from: isoMinute(S.t[S.t.length - WARMUP_DAYS * DAY_MIN]), to: isoMinute(S.t[S.t.length - 1]), days, pAbsQuantiles: pStats });
+        writeJSON('warmup.json', { note: 'Warm-up simulation run once at launch (the long backtest is data/backtest.json, from engine/backtest.mjs): each day the experts were refit on earlier data only, then the full online system (ensemble weights, conformal bands, calibration) was stepped minute by minute. The generation-0 settings were chosen in a longer walk-forward test that overlaps these days, so treat this as slightly optimistic. The live record is what counts.', from: isoMinute(S.t[S.t.length - WARMUP_DAYS * DAY_MIN]), to: isoMinute(S.t[S.t.length - 1]), days, pAbsQuantiles: pStats });
         status.liveSince = new Date(state.t + 2 * MINUTE).toISOString();
         log('p-edge quantiles (50/80/95%):', JSON.stringify(pStats));
       }

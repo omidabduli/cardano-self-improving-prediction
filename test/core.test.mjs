@@ -51,11 +51,11 @@ const fngSeries = (ada) => {
 };
 
 test('features are strictly causal (no lookahead)', () => {
-  const { ada, btc } = synthCandles(5500);
+  const { ada, btc } = synthCandles(WARMUP + 1200);
   const eth = btc.map((k) => ({ ...k, c: k.c / 20 }));
   const fng = fngSeries(ada);
-  const full = buildSeries(ada, btc, ada[5499].t, { eth, fng });
-  const cut = 5000;
+  const full = buildSeries(ada, btc, ada[WARMUP + 1199].t, { eth, fng });
+  const cut = WARMUP + 700;
   // the shorter history also lacks every sentiment value published after the cut
   const part = buildSeries(ada.slice(0, cut), btc.slice(0, cut), ada[cut - 1].t, { eth: eth.slice(0, cut), fng: fng.filter((x) => x.t + FNG_LAG <= ada[cut - 1].t + MINUTE) });
   const F1 = computeFeatures(full), F2 = computeFeatures(part);
@@ -66,12 +66,12 @@ test('features are strictly causal (no lookahead)', () => {
     }
     assert.equal(F1.vol[i], F2.vol[i]);
   }
-  for (let j = 0; j < D; j++) assert.ok(Number.isFinite(F1.X[5200 * D + j]), `feature ${FEATURES[j]} finite`);
+  for (let j = 0; j < D; j++) assert.ok(Number.isFinite(F1.X[(WARMUP + 900) * D + j]), `feature ${FEATURES[j]} finite`);
   assert.ok(Number.isNaN(F1.X[(WARMUP - 1) * D]));
   // a strided computation gives the same rows on every issue minute
   const F3 = computeFeatures(full, WARMUP, CADENCE);
   let checked = 0;
-  for (let i = WARMUP; i < 5500; i++) {
+  for (let i = WARMUP; i < WARMUP + 1200; i++) {
     if (!isIssue(full.t[i])) { assert.ok(Number.isNaN(F3.vol[i])); continue; }
     checked++;
     for (let j = 0; j < D; j++) assert.equal(F3.X[i * D + j], F1.X[i * D + j]);

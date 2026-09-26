@@ -1,7 +1,7 @@
 // Live market data in the browser: REST history + a WebSocket stream, both straight from
 // Binance's public market-data endpoints (no key, no server in between).
 
-import { REST_HOSTS, WS_HOSTS, SYMBOL, BTC_SYMBOL, ETH_SYMBOL, MINUTE } from '../core/config.js';
+import { REST_HOSTS, WS_HOSTS, SYMBOL, LEAD_SYMBOL, PEER_SYMBOL, MINUTE } from '../core/config.js';
 import { parseKline, parseWsKline } from '../core/candles.js';
 
 let restHost = 0;
@@ -94,7 +94,7 @@ export class LiveStream {
   }
 
   connect() {
-    const streams = [SYMBOL, BTC_SYMBOL, ETH_SYMBOL].map((s) => `${s.toLowerCase()}@kline_1m`).concat(`${SYMBOL.toLowerCase()}@aggTrade`).join('/');
+    const streams = [SYMBOL, LEAD_SYMBOL, PEER_SYMBOL].map((s) => `${s.toLowerCase()}@kline_1m`).concat(`${SYMBOL.toLowerCase()}@aggTrade`).join('/');
     const url = `${WS_HOSTS[this.hostIdx % WS_HOSTS.length]}/stream?streams=${streams}`;
     this.cb.onState?.('connecting');
     let opened = false;

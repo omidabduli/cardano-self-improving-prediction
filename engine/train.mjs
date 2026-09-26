@@ -2,7 +2,7 @@
 
 import { HORIZONS, MAX_H, Z_CLIP, DAY_MIN, Q_LEVELS, isIssue } from '../site/core/config.js';
 import { computeFeatures, targets, featureIndices, GROUP_NAMES, WARMUP, D, FEATURES } from '../site/core/features.js';
-import { EXPERTS, ridgePredict, gbdtPredict, expertPredictions } from '../site/core/models.js';
+import { EXPERTS, ridgePredict, gbdtPredict, expertPredictions, directionScores } from '../site/core/models.js';
 import { Engine, freshState } from '../site/core/engine.js';
 import { emptyHorizonAggs, addResolution } from '../site/core/metrics.js';
 import { fitRidge } from './ridge.mjs';
@@ -297,12 +297,66 @@ export function evolve(ds, prev, { seed, folds = EVOLVE.folds, nLinear = 8, nFor
   return { cfg, report };
 }
 
+// ---------- direction model ----------
+
+// Chosen in a walk-forward search on Bitcoin (the sister project Bitcast), 24 Sep 2025 .. 24 May
+// 2026 only, and used unchanged here: no Cardano data was used to pick them.
+// a ridge and a boosted-tree model on the sign of the move, all signals, 240-day window.
+export const DIRECTION = {
+  window: 240,
+  lambda: 1e5, // ridge penalty x h/60
+  forest: { trees: 150, depth: 4, lr: 0.03, minLeaf: 300, subsample: 0.5, colsample: 0.6, l2: 50 },
+};
+
+function signTargets(ds) {
+  if (!ds._sign) {
+    ds._sign = {};
+    for (const h of HORIZONS) ds._sign[h] = ds.Z[h].map((z) => (Number.isFinite(z) ? Math.sign(z) : NaN));
+  }
+  return ds._sign;
+}
+
+// Fit the direction model for a first prediction at minute index s (see models.directionScores).
+export function fitDirection(ds, s, seed = 1, cfg = DIRECTION) {
+  const rows = trainRows(ds, s, cfg.window);
+  if (rows.length < 1000) return null;
+  const Y = signTargets(ds);
+  const all = Array.from({ length: D }, (_, j) => j);
+  const out = { window: cfg.window, h: {} };
+  for (const h of HORIZONS) {
+    const ridge = fitRidge(ds.X, D, rows, all, { y: Y[h] }, cfg.lambda * hScale(h)).y;
+    let mean = 0;
+    for (const i of rows) mean += Y[h][i];
+    mean /= rows.length;
+    const y = new Float64Array(ds.n);
+    for (const i of rows) y[i] = Y[h][i] - mean; // no up/down bias: only patterns
+    const gbdt = compactForest(fitGBDT(ds.X, D, rows, y, all, cfg.forest, seed + h));
+    const sample = [];
+    for (let j = 0; j < rows.length; j += 20) sample.push(rows[j]);
+    let sa = 0, sb = 0;
+    const a = [], b = [];
+    for (const i of sample) { a.push(ridgePredict(ridge, ds.X, i * D)); b.push(gbdtPredict(gbdt, ds.X, i * D)); }
+    for (let k = 0; k < sample.length; k++) { sa += a[k] ** 2; sb += b[k] ** 2; }
+    sa = Math.sqrt(sa / sample.length) || 1; sb = Math.sqrt(sb / sample.length) || 1;
+    const absD = sample.map((_, k) => Math.abs(0.5 * (a[k] / sa + b[k] / sb))).sort((x, z) => x - z);
+    const r = (x) => Number(x.toPrecision(7));
+    out.h[h] = {
+      ridge: { idx: ridge.idx, mean: ridge.mean.map(r), std: ridge.std.map(r), w: ridge.w.map(r), b: r(ridge.b) },
+      gbdt,
+      sa: r(sa), sb: r(sb),
+      thr: r(absD[absD.length >> 1]),
+    };
+  }
+  return out;
+}
+
 // ---------- model assembly ----------
 
 export function buildModel(ds, cfg, meta) {
   const s = ds.n; // first minute this model will predict is the one after the data
   const experts = fitExperts(ds, s, cfg, meta.seed || 1);
   const resid = residQuantiles(ds, trainRows(ds, s, 30));
+  const direction = fitDirection(ds, s, meta.seed || 1);
   return {
     v: 1,
     id: meta.id,
@@ -312,6 +366,7 @@ export function buildModel(ds, cfg, meta) {
     features: FEATURES,
     experts: experts.map(roundExpert),
     resid,
+    direction,
     configs: cfg,
   };
 }
@@ -344,11 +399,12 @@ export function warmup(ds, cfg, days, { log = console.log, seed = 1 } = {}) {
     const s = s0 + d * DAY_MIN, e = d === days - 1 ? ds.n : s + DAY_MIN;
     const t0 = Date.now();
     const experts = fitExperts(ds, s, cfg, seed + d);
-    const model = { experts: experts.map(roundExpert), resid: residQuantiles(ds, trainRows(ds, s, 30)) };
+    const model = { experts: experts.map(roundExpert), resid: residQuantiles(ds, trainRows(ds, s, 30)), direction: fitDirection(ds, s, seed + d) };
     eng.model = model;
     for (let i = s; i < e; i++) {
-      const mus = isIssue(ds.S.t[i]) ? expertPredictions(model, ds.X, D, i) : null;
-      const { resolved, pred } = eng.step(ds.S.t[i], ds.S.c[i], ds.vol[i], mus);
+      const issue = isIssue(ds.S.t[i]);
+      const mus = issue ? expertPredictions(model, ds.X, D, i) : null;
+      const { resolved, pred } = eng.step(ds.S.t[i], ds.S.c[i], ds.vol[i], mus, issue ? directionScores(model, ds.X, D, i) : null);
       if (pred) for (const h of HORIZONS) pAbs[h].push(Math.abs(pred.h[h].p - 0.5));
       for (const r of resolved) {
         const dk = new Date(r.t).toISOString().slice(0, 10);

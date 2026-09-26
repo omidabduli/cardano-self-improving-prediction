@@ -1,4 +1,4 @@
-// Candle utilities: parse Binance klines and align ADA + BTC onto one gap-free minute grid.
+// Candle utilities: parse Binance klines and align the coin and its lead onto one gap-free minute grid.
 
 import { MINUTE } from './config.js';
 
@@ -38,12 +38,12 @@ export const FNG_LAG = 15 * MINUTE;
  * Missing minutes are filled with flat zero-volume candles at the previous close,
  * so index i always corresponds to S.t[0] + i * MINUTE.
  *
- * Fields: t o h l c v qv tr tb (ADA) · bc bv btb (BTC close, volume, taker-buy volume) · ec (ETH
- * close) · fg fg7 (Fear & Greed now and 7 days earlier: the last value that was public at the
+ * Fields: t o h l c v qv tr tb (SYMBOL) · bc bv btb (LEAD_SYMBOL close, volume, taker-buy volume) · ec
+ * (PEER_SYMBOL close) · fg fg7 (Fear & Greed now and 7 days earlier: the last value that was public at the
  * close of each minute; 50 = neutral when unknown) · syn (1 = filled).
  *
- * @param {Array} ada   ADAUSDT candles (any order, duplicates allowed)
- * @param {Array} btc   BTCUSDT candles
+ * @param {Array} ada   SYMBOL candles (any order, duplicates allowed)
+ * @param {Array} btc   LEAD_SYMBOL candles
  * @param {number} endMs open time of the last minute to include
  * @param {{eth?: Array, fng?: {t:number,v:number}[]}} extra
  */
@@ -75,7 +75,7 @@ export function buildSeries(ada, btc, endMs, extra = {}) {
     S.v[i] = a.v; S.qv[i] = a.qv; S.tr[i] = a.tr; S.tb[i] = a.tb;
     S.bc[i] = b.c; S.bv[i] = b.v; S.btb[i] = b.tb;
     const e = E.get(t) || pe;
-    S.ec[i] = e ? e.c : 1; // no ETH data: constant, so ETH returns read as zero
+    S.ec[i] = e ? e.c : 1; // no peer data: constant, so peer returns read as zero
     pa = a; pb = b; pe = e;
     // a value is usable at the close of minute t if it was public by then
     const close = t + MINUTE;

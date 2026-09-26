@@ -23,8 +23,8 @@ export function writeJSON(rel, obj, pretty = false) {
 export const isoDay = (ms) => new Date(ms).toISOString().slice(0, 10);
 export const isoMinute = (ms) => new Date(ms).toISOString().slice(0, 16);
 
-// per horizon h (minutes): predicted log-return (bp), P(up), 80% band low/high (bp)
-export const CSV_HEADER = ['time', 'close', ...HORIZONS.flatMap((h) => [`ret${h}`, `p${h}`, `lo${h}`, `hi${h}`])].join(',');
+// per horizon h (minutes): predicted log-return (bp), P(up), 80% band low/high (bp), confident call (1/0)
+export const CSV_HEADER = ['time', 'close', ...HORIZONS.flatMap((h) => [`ret${h}`, `p${h}`, `lo${h}`, `hi${h}`, `conf${h}`])].join(',');
 
 // Append rows (already formatted, one per minute, sorted) to per-day CSV files, skipping
 // minutes that are already recorded so re-runs are idempotent.

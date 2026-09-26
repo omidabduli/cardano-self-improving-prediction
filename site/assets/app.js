@@ -2,10 +2,10 @@
 // checkpoint with the same engine the backend uses, then keeps stepping on the live Binance
 // stream. Every forecast and score on the page is computed here, in the browser.
 
-import { HORIZONS, MINUTE, CADENCE, SYMBOL, BTC_SYMBOL, ETH_SYMBOL, isIssue } from '../core/config.js';
+import { HORIZONS, MINUTE, CADENCE, SYMBOL, LEAD_SYMBOL, PEER_SYMBOL, PRICE_DIGITS, isIssue } from '../core/config.js';
 import { buildSeries, indexOf } from '../core/candles.js';
 import { computeFeatures, D, WARMUP } from '../core/features.js';
-import { expertPredictions, EXPERTS } from '../core/models.js';
+import { expertPredictions, directionScores, EXPERTS } from '../core/models.js';
 import { Engine } from '../core/engine.js';
 import { emptyAgg, addResolution, mergeAgg, summarize } from '../core/metrics.js';
 import { fetchKlines, fetchFearGreed, fetchPrice, LiveStream, serverClockOffset } from './feed.js';
@@ -13,7 +13,7 @@ import { drawChart } from './chart.js';
 import * as F from './format.js';
 
 const KEEP_MIN = WARMUP + 1500; // candles kept in memory: warm-up + a day for the chart
-const LOG_ROWS = 10;
+const LOG_ROWS = 8;
 const H_NAME = { 60: '1 hour', 180: '3 hours', 1440: '24 hours' };
 const H_SHORT = { 60: '1 h', 180: '3 h', 1440: '24 h' };
 
@@ -69,8 +69,8 @@ function parseCSV(text) {
     if (!c[2]) continue;
     const pred = { t, c: close, h: {} };
     HORIZONS.forEach((h, k) => {
-      const o = 2 + k * 4;
-      pred.h[h] = { ret: Number(c[o]) / 1e4, p: Number(c[o + 1]), lo80: Number(c[o + 2]) / 1e4, hi80: Number(c[o + 3]) / 1e4 };
+      const o = 2 + k * 5;
+      pred.h[h] = { ret: Number(c[o]) / 1e4, p: Number(c[o + 1]), lo80: Number(c[o + 2]) / 1e4, hi80: Number(c[o + 3]) / 1e4, strong: c[o + 4] === '1' };
     });
     app.official.set(t, pred);
   }
@@ -80,7 +80,7 @@ function fromEngine(pred) {
   const o = { t: pred.t, c: pred.c, h: {} };
   for (const h of HORIZONS) {
     const x = pred.h[h];
-    o.h[h] = { ret: x.ret, med: x.med, p: x.p, w: x.w, lo80: x.lo[1], hi80: x.hi[1] };
+    o.h[h] = { ret: x.ret, med: x.med, p: x.p, strong: x.strong, w: x.w, lo80: x.lo[1], hi80: x.hi[1] };
   }
   return o;
 }
@@ -105,7 +105,7 @@ async function loadPublished() {
 
 async function loadCandles(fromMs) {
   const t = now();
-  const [ada, btc, eth] = await Promise.all([SYMBOL, BTC_SYMBOL, ETH_SYMBOL].map((s) => fetchKlines(s, fromMs, t)));
+  const [ada, btc, eth] = await Promise.all([SYMBOL, LEAD_SYMBOL, PEER_SYMBOL].map((s) => fetchKlines(s, fromMs, t)));
   for (const [list, map] of [[ada, app.ada], [btc, app.btc], [eth, app.eth]]) {
     for (const k of list) if (k.T < t) map.set(k.t, k); else if (map === app.ada) app.price ??= k.c;
   }
@@ -148,8 +148,9 @@ function advance() {
   }
   let changed = false;
   for (; i < S.t.length; i++) {
-    const mus = i >= WARMUP && isIssue(S.t[i]) ? expertPredictions(app.model, Fx.X, D, i) : null;
-    const { resolved, pred } = eng.step(S.t[i], S.c[i], Fx.vol[i], mus);
+    const issue = i >= WARMUP && isIssue(S.t[i]);
+    const mus = issue ? expertPredictions(app.model, Fx.X, D, i) : null;
+    const { resolved, pred } = eng.step(S.t[i], S.c[i], Fx.vol[i], mus, issue ? directionScores(app.model, Fx.X, D, i) : null);
     if (pred) { app.live.set(S.t[i], fromEngine(pred)); app.lastPred = fromEngine(pred); }
     for (const r of resolved) addResolution(app.sinceCkpt[r.h], r);
     changed = true;
@@ -198,7 +199,7 @@ function startStream() {
     },
     onOpen() { if (app.engine) catchUp(); },
     onKline(sym, k) {
-      const map = sym === SYMBOL ? app.ada : sym === BTC_SYMBOL ? app.btc : sym === ETH_SYMBOL ? app.eth : null;
+      const map = sym === SYMBOL ? app.ada : sym === LEAD_SYMBOL ? app.btc : sym === PEER_SYMBOL ? app.eth : null;
       if (!map) return;
       if (k.closed) { map.set(k.t, k); onClosed(k.t); } else if (sym === SYMBOL) setPrice(k.c);
     },
@@ -225,39 +226,30 @@ function latestPred() {
 
 function renderPrice() {
   if (!Number.isFinite(app.price)) return;
-  $('price').textContent = F.price(app.price, 4);
+  $('price').textContent = F.price(app.price, PRICE_DIGITS);
   const c24 = closeAt(lastClosedMinute() - 1440 * MINUTE);
   if (c24) $('chg24').textContent = F.signedPct(app.price / c24 - 1);
-  document.title = `$${app.price.toFixed(4)} ADA · ADAptive`;
+  document.title = `${F.price(app.price, PRICE_DIGITS)} ADA · ADAptive`;
 }
 
 const pctText = (r, d = 2) => `${r > 0 ? '+' : r < 0 ? '\u2212' : '\u00b1'}${Math.abs(r * 100).toFixed(d)}%`;
 
-// One forecast box: the price estimate, its change in % (colour plus an arrow, so colour is
-// never the only signal) and the 80% range as a small bar.
-function forecastBox(pred, h, t0, tNow) {
+// The predicted move as one number (log-return): the direction call (P(up)) times how far the
+// price typically moves over the horizon, read off the calibrated 80% range (for a normal-shaped
+// move, the mean absolute move is 0.798 sigma and the 80% range spans 2 x 1.2816 sigma). It is
+// small when the model isn't sure and grows with its confidence.
+const estMove = (x) => (2 * x.p - 1) * 0.798 * (x.hi80 - x.lo80) / (2 * 1.2816);
+
+// One forecast box: the predicted price, its change and the direction call.
+function forecastBox(pred, h) {
   const x = pred.h[h];
-  const due = t0 + h * MINUTE;
-  const c = pred.c;
-  const med = c * Math.exp(x.med ?? x.ret), lo = c * Math.exp(x.lo80), hi = c * Math.exp(x.hi80);
-  const chg = med / c - 1, loChg = lo / c - 1, hiChg = hi / c - 1;
-  const flat = Math.abs(chg) < 0.00005; // rounds to ±0.00%
-  const dir = flat ? 'flat' : chg > 0 ? 'up' : 'down';
-  const arrow = flat ? '\u2248' : dir === 'up' ? '\u25b2' : '\u25bc';
-  // range bar: the 80% range, the start price (tick), the live price (ring) and the estimate (dot)
-  const live = Number.isFinite(app.price) ? app.price : null;
-  const a = Math.min(lo, c, live ?? c), b = Math.max(hi, c, live ?? c), pad = (b - a) * 0.08 || c * 0.001;
-  const pos = (v) => (((v - (a - pad)) / (b - a + 2 * pad)) * 100).toFixed(1);
+  const c = pred.c, r = estMove(x), est = c * Math.exp(r);
+  const up = x.p >= 0.5, pr = up ? x.p : 1 - x.p;
+  const dir = up ? 'up' : 'down';
   return `<div class="fc">
     <h3 class="fc-h">In ${H_NAME[h]}</h3>
-    <p class="fc-head"><span class="fc-price">${F.price(med, 4)}</span><span class="fc-chg ${dir}">${arrow} ${flat ? '\u00b10.00%' : pctText(chg)}</span></p>
-    <div class="fc-bar" role="img" aria-label="80% range ${F.price(lo, 4)} to ${F.price(hi, 4)}, estimate ${F.price(med, 4)}">
-      <i class="band" style="left:${pos(lo)}%;width:${(pos(hi) - pos(lo)).toFixed(1)}%"></i>
-      <i class="now" style="left:${pos(c)}%" title="${F.price(c, 4)} at ${F.hhmm(t0)}"></i>
-      ${live !== null && Math.abs(live / c - 1) > 0.0002 ? `<i class="cur" style="left:${pos(live)}%" title="now ${F.price(live, 4)}"></i>` : ''}
-      <i class="est ${dir}" style="left:${pos(med)}%"></i>
-    </div>
-    <p class="fc-range"><span>${F.price(lo, 4)} <b class="down">${pctText(loChg, 1)}</b></span><span>80% range</span><span>${F.price(hi, 4)} <b class="up">${pctText(hiChg, 1)}</b></span></p>
+    <p class="fc-head"><span class="fc-price">${F.price(est, PRICE_DIGITS)}</span><span class="fc-chg ${dir}">${up ? '▲' : '▼'} ${pctText(r)}</span></p>
+    <p class="fc-dir"><span class="${dir}">${up ? 'Up' : 'Down'}, ${(pr * 100).toFixed(0)}% likely</span>${x.strong ? ' <span class="status done">confident</span>' : ''}</p>
   </div>`;
 }
 
@@ -278,10 +270,10 @@ function renderForecasts() {
     return;
   }
   const t0 = issuedAt(pred.t);
-  $('forecasts').innerHTML = HORIZONS.map((h) => forecastBox(pred, h, t0, tNow)).join('');
+  $('forecasts').innerHTML = HORIZONS.map((h) => forecastBox(pred, h)).join('');
   const next = issuedAt(pred.t) + CADENCE * MINUTE;
   const stale = issuedAt(pred.t) <= tNow - CADENCE * MINUTE;
-  $('issueLine').innerHTML = `<span>${stale ? 'Last published forecast, made' : 'Made'} at <b>${F.hhmm(t0)}</b> from ${F.price(pred.c, 4)}</span>`
+  $('issueLine').innerHTML = `<span>${stale ? 'Last published forecast, made' : 'Made'} at <b>${F.hhmm(t0)}</b> from ${F.price(pred.c, PRICE_DIGITS)}</span>`
     + `<span>Next forecast in <b>${next > tNow ? F.countdown(next - tNow) : 'a moment'}</b></span>`;
 }
 
@@ -291,60 +283,43 @@ function renderChart() {
   for (const [t, k] of app.ada) if (t >= t0 && (Math.round(t / MINUTE) % 5 === 0)) series.push({ t: t + MINUTE, c: k.c });
   if (series.length < 10) for (const [t, c] of app.csvClose) if (t >= t0) series.push({ t: t + MINUTE, c });
   series.sort((a, b) => a.t - b.t);
-  const band = [];
+  // prediction line: every 1-hour prediction at the moment it was (or will be) due, then the
+  // latest 3-hour and 24-hour predictions
+  const pred = [];
   const all = new Map([...app.official, ...app.live]);
   for (const [t, p] of all) {
     const at = issuedAt(t) + 60 * MINUTE;
-    if (at < t0 || at > tNow) continue;
-    band.push({ t: at, lo: p.c * Math.exp(p.h[60].lo80), hi: p.c * Math.exp(p.h[60].hi80) });
+    if (at >= t0 && at <= tNow + 60 * MINUTE) pred.push({ t: at, c: p.c * Math.exp(estMove(p.h[60])) });
   }
-  band.sort((a, b) => a.t - b.t);
-  const pred = latestPred();
-  const fc = pred ? HORIZONS.map((h) => {
-    const x = pred.h[h];
-    return { h, t: issuedAt(pred.t) + h * MINUTE, med: pred.c * Math.exp(x.med ?? x.ret), lo: pred.c * Math.exp(x.lo80), hi: pred.c * Math.exp(x.hi80) };
-  }) : [];
-  drawChart($('chartSvg'), { now: tNow, price: app.price ?? series.at(-1)?.c, series, band, fc });
+  pred.sort((a, b) => a.t - b.t);
+  const last = latestPred();
+  const marks = last ? HORIZONS.map((h) => ({ h, t: issuedAt(last.t) + h * MINUTE, c: last.c * Math.exp(estMove(last.h[h])) })) : [];
+  for (const m of marks) if (m.h > 60) pred.push({ t: m.t, c: m.c });
+  drawChart($('chartSvg'), { now: tNow, price: app.price ?? series.at(-1)?.c, series, pred, marks });
 }
 
 function totals(h) {
   return mergeAgg(app.status?.totals?.all?.[h], app.sinceCkpt[h]);
 }
 
-function renderScores() {
-  $('scores').querySelector('tbody').innerHTML = HORIZONS.map((h) => {
-    const a = totals(h), s = summarize(a);
-    if (!s) return `<tr><td class="h">${H_SHORT[h]}</td><td colspan="4">No forecast has reached its time yet. The first ${H_NAME[h]} forecast is checked ${H_NAME[h]} after launch.</td></tr>`;
-    const dir = a.ni ? `${(a.hi / a.ni * 100).toFixed(1)}%` : '—';
-    const z = s.ni >= 10 ? `z = ${s.zscore.toFixed(1)} vs. a coin flip` : 'too few to judge yet';
-    const goal = h === 60 ? ' · goal 54%' : '';
-    return `<tr>
-      <td class="h">${H_SHORT[h]}</td>
-      <td class="big">${dir}<small>${F.num(s.ni)} independent · ${z}${goal}</small></td>
-      <td class="big">${(s.cov[1] * 100).toFixed(1)}%<small>of ${F.num(s.n)} forecasts</small></td>
-      <td class="big">${(s.mae * 100).toFixed(2)}%<small>"no change": ${(s.mae0 * 100).toFixed(2)}%</small></td>
-      <td class="num">${F.num(s.n)}</td>
-    </tr>`;
-  }).join('');
-  const since = HORIZONS.reduce((a, h) => a + app.sinceCkpt[h].n, 0);
-  const s = app.status;
-  let note = s ? `Official record committed ${F.ago(Date.parse(s.updatedAt))}.` : '';
-  if (app.marketOk && since) note += ` The ${F.num(since)} results since then were scored in your browser with the same code and data.`;
-  const bt = app.backtest && summarizeBacktest(app.backtest);
-  if (bt) note += ` Launch backtest (${bt.days} simulated days before going live): direction ${bt.dir}, 80% range held ${bt.cov}.`;
-  $('recordNote').textContent = note;
-  if (s?.liveSince) $('liveSince').textContent = `live since ${F.dateShort(Date.parse(s.liveSince))}`;
+const pctCell = (hit, n) => (n ? `${(hit / n * 100).toFixed(1)}%` : '—');
+
+// Per horizon: direction right on confident calls (non-overlapping), with all calls underneath.
+function scoreCell(a, empty) {
+  if (!a || !a.ni) return `<td class="big">—<small>${empty}</small></td>`;
+  return `<td class="big">${pctCell(a.shi, a.sni)}<small>confident calls (${F.num(a.sni)}) · all calls ${pctCell(a.hi, a.ni)}</small></td>`;
 }
 
-function summarizeBacktest(b) {
-  const days = Object.values(b.days || {});
-  if (!days.length) return null;
-  const per = HORIZONS.map((h) => days.reduce((a, d) => mergeAgg(a, d[h]), null));
-  return {
-    days: days.length,
-    dir: HORIZONS.map((h, k) => `${H_SHORT[h]} ${(per[k].hi / per[k].ni * 100).toFixed(0)}% of ${per[k].ni}`).join(', '),
-    cov: HORIZONS.map((h, k) => `${(per[k].c[1] / per[k].n * 100).toFixed(0)}%`).join(' / '),
-  };
+function renderScores() {
+  const b = app.backtest, keys = Object.keys(b?.days || {});
+  $('scores').querySelector('tbody').innerHTML = HORIZONS.map((h) => {
+    const bt = keys.reduce((a, d) => mergeAgg(a, b.days[d][h]), null);
+    return `<tr><td class="h">${H_SHORT[h]}</td>${scoreCell(totals(h), 'first results after ' + H_NAME[h])}${scoreCell(bt, 'no test yet')}</tr>`;
+  }).join('');
+  const s = app.status;
+  $('recordNote').textContent = (s ? `Live record updated ${F.ago(Date.parse(s.updatedAt))}. ` : '')
+    + 'Each call counts once: one per hour, per 3 hours or per day, so a single lucky move is never counted twice. At 24 hours there is no edge yet.';
+  if (s?.liveSince) $('liveSince').textContent = `live since ${F.dateShort(Date.parse(s.liveSince))}`;
 }
 
 function renderLog() {
@@ -364,45 +339,15 @@ function renderLog() {
   $('log').querySelector('tbody').innerHTML = rows.slice(0, LOG_ROWS).map(({ t, h, p, c1 }) => {
     const x = p.h[h];
     const y = Math.log(c1 / p.c);
-    const inside = y >= x.lo80 && y <= x.hi80;
-    const dir = y === 0 ? 'flat' : (y > 0) === (x.p >= 0.5) ? 'direction right' : 'direction wrong';
+    const right = y !== 0 && (y > 0) === (x.p >= 0.5);
     return `<tr>
       <td class="num">${when(issuedAt(t))}</td>
       <td>${H_SHORT[h]}</td>
-      <td class="num">${F.price(p.c * Math.exp(x.med ?? x.ret), 4)}</td>
-      <td class="num">${F.price(p.c * Math.exp(x.lo80), 4)} – ${F.price(p.c * Math.exp(x.hi80), 4)}</td>
-      <td class="num">${F.price(c1, 4)}</td>
-      <td><span class="status ${inside ? 'done' : 'active'}">${inside ? 'in range' : 'outside'}</span> <small>${dir}</small></td>
+      <td class="num">${F.price(p.c * Math.exp(estMove(x)), PRICE_DIGITS)}</td>
+      <td class="num">${F.price(c1, PRICE_DIGITS)}</td>
+      <td>${y === 0 ? '<span class="status planned">flat</span>' : `<span class="status ${right ? 'done' : 'active'}">${right ? 'right' : 'wrong'}</span>`}</td>
     </tr>`;
-  }).join('') || `<tr><td colspan="6">The first forecasts are checked one hour after launch.</td></tr>`;
-}
-
-function renderCouncil() {
-  const eng = app.engine;
-  const w = Object.fromEntries(HORIZONS.map((h) => [h, eng ? eng.weights(h) : null]));
-  $('council').querySelector('tbody').innerHTML = EXPERTS.map((e, k) => `<tr>
-    <td class="name">${F.esc(e.name)}</td>
-    <td class="reads">${F.esc(e.role)}</td>
-    ${HORIZONS.map((h) => {
-      const v = w[h]?.[k];
-      return `<td class="num">${Number.isFinite(v) ? `<span class="trust"><i style="width:${Math.round(v * 120)}px"></i>${(v * 100).toFixed(0)}%</span>` : '—'}</td>`;
-    }).join('')}
-  </tr>`).join('');
-}
-
-function renderEvolution() {
-  const gens = app.evo?.generations || [];
-  const m = app.model;
-  if (!m) return;
-  const promos = gens.reduce((a, g) => a + (g.report?.linear?.promoted ? 1 : 0) + (g.report?.forest?.promoted ? 1 : 0), 0);
-  const last = gens.at(-1);
-  let txt = `Generation ${m.generation}, trained ${F.ago(Date.parse(m.trainedAt))}. `;
-  txt += promos ? `${promos} challenger${promos === 1 ? ' has' : 's have'} won so far.` : 'No challenger has beaten the launch settings yet.';
-  if (last?.report) {
-    const r = last.report;
-    txt += ` Last tournament: Linear Brain ${r.linear.promoted ? 'replaced' : 'kept'}, Boosted Forest ${r.forest.promoted ? 'replaced' : 'kept'}.`;
-  }
-  $('evoNote').textContent = txt;
+  }).join('') || `<tr><td colspan="5">The first predictions are checked one hour after launch.</td></tr>`;
 }
 
 function renderStatic() {
@@ -417,7 +362,6 @@ function renderStatic() {
     banner.hidden = false;
     banner.textContent = `GitHub last committed the official record ${F.ago(Date.parse(s.updatedAt))}. The forecasts and scores on this page are still computed live.`;
   } else banner.hidden = true;
-  renderEvolution();
 }
 
 function renderMinute() {
@@ -427,7 +371,6 @@ function renderMinute() {
   renderChart();
   renderScores();
   renderLog();
-  renderCouncil();
 }
 
 function tick() {
@@ -463,6 +406,7 @@ async function boot() {
   const gh = `https://github.com/${repo}`;
   $('ghLink').href = gh;
   $('csvLink').href = `${gh}/tree/main/data/predictions`;
+  $('btCsvLink').href = `${gh}/tree/main/data/backtest`;
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { catchUp(); pollStatus(); } });
   let resizeT = 0;
   addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(renderChart, 150); });

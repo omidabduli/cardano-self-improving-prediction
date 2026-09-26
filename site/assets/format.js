@@ -2,8 +2,8 @@
 
 export const pad2 = (n) => String(n).padStart(2, '0');
 
-export function price(c, digits = 4) {
-  return Number.isFinite(c) ? '$' + c.toFixed(digits) : '—';
+export function price(c, digits = 2) {
+  return Number.isFinite(c) ? '$' + c.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits }) : '—';
 }
 
 export function pct(x, d = 1) {

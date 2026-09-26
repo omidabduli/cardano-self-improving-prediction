@@ -66,3 +66,29 @@ export function expertPredictions(model, X, D, i) {
   }
   return out;
 }
+
+/**
+ * Direction score of the published direction model on feature row i, per horizon, or null.
+ * The model is trained on the sign of the move only (up or down), so a few huge swings can't
+ * dominate it the way they dominate a model of the move's size. It is the average of a ridge
+ * and a boosted-tree model, each scaled by its spread on its training window, so the score is
+ * in "typical signal" units; |score| >= thr marks a confident call (thr = the median |score|
+ * on the training window).
+ * @returns {Object<number, {d: number, strong: boolean}>|null}
+ */
+export function directionScores(model, X, D, i) {
+  const dm = model.direction;
+  if (!dm) return null;
+  const off = i * D;
+  for (let j = 0; j < D; j++) if (!Number.isFinite(X[off + j])) return null;
+  const out = {};
+  for (const h of HORIZONS) {
+    const m = dm.h[h];
+    let d = 0.5 * (ridgePredict(m.ridge, X, off) / m.sa + gbdtPredict(m.gbdt, X, off) / m.sb);
+    if (!Number.isFinite(d)) d = 0;
+    d = Math.max(-5, Math.min(5, d));
+    out[h] = { d, strong: Math.abs(d) >= m.thr };
+  }
+  return out;
+}
+

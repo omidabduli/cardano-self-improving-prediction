@@ -4,8 +4,10 @@
 //   1. Hedge: each expert's trust weight = exp(-eta * its discounted recent squared error).
 //   2. Adaptive conformal inference: each prediction band widens after misses and narrows
 //      after hits until its hit-rate matches the promised coverage (50/80/95 %).
-//   3. Online logistic calibration: maps the ensemble signal to an honest P(up)
+//   3. Online logistic calibration: maps the direction signal to an honest P(up)
 //      (a learned slope only; no up/down bias, so calls never just follow recent drift).
+//      The direction signal is the direction model's score when the model has one
+//      (models.directionScores), otherwise the ensemble's predicted move.
 
 import { HORIZONS, BANDS, BAND_Q, Q_LEVELS, Z_CLIP, ONLINE, STRONG_EDGE, isIssue } from './config.js';
 
@@ -30,8 +32,12 @@ function plattPrior() {
   return [n * 0.05 * 0.05, 0, n];
 }
 
-// Pending predictions are stored compactly: [t, h, c, vol, mu, p, lo50, hi50, lo80, hi80, lo95, hi95, ...expertMus]
-const P_T = 0, P_H = 1, P_C = 2, P_VOL = 3, P_MU = 4, P_P = 5, P_B = 6, P_E = 12;
+// Pending predictions are stored compactly:
+// [t, h, c, vol, mu, p, lo50, hi50, lo80, hi80, lo95, hi95, dirSignal, strong, ...expertMus]
+const P_T = 0, P_H = 1, P_C = 2, P_VOL = 3, P_MU = 4, P_P = 5, P_B = 6, P_X = 12, P_S = 13, P_E = 14;
+// direction scores are in "typical signal" units (~1); the calibration works on the scale of
+// the ensemble's predicted move (~0.05)
+const DIR_SCALE = 0.05;
 
 export class Engine {
   /**
@@ -83,9 +89,10 @@ export class Engine {
    * @param {number} vol    volatility estimate at t (features.vol)
    * @param {object|null} mus expert predictions per horizon (models.expertPredictions) or null;
    *                        only used on issue minutes (config.isIssue), so callers may skip it otherwise
+   * @param {object|null} dir direction scores per horizon (models.directionScores) or null
    * @returns {{resolved: object[], pred: object|null}}
    */
-  step(t, close, vol, mus) {
+  step(t, close, vol, mus, dir = null) {
     const resolved = [];
     const keep = [];
     for (const p of this.s.pending) {
@@ -94,7 +101,7 @@ export class Engine {
     }
     this.s.pending = keep;
     let pred = null;
-    if (mus && isIssue(t) && Number.isFinite(vol) && vol > 0) pred = this._predict(t, close, vol, mus);
+    if (mus && isIssue(t) && Number.isFinite(vol) && vol > 0) pred = this._predict(t, close, vol, mus, dir);
     this.s.t = t;
     return { resolved, pred };
   }
@@ -129,12 +136,12 @@ export class Engine {
     if (y !== 0) {
       const u = y > 0 ? 1 : 0;
       hit = (y > 0) === (p[P_P] >= 0.5) ? 1 : 0;
-      this._platt(h, mu, u);
+      this._platt(h, p[P_X], u);
     }
 
     return {
       t: p[P_T], h, c0: p[P_C], c1: close, y, z: zc, mu, ret: mu * p[P_VOL] * Math.sqrt(h), p: p[P_P], hit, inb,
-      strong: Math.abs(p[P_P] - 0.5) >= STRONG_EDGE,
+      strong: p[P_S] === 1,
       mus: p.slice(P_E),
     };
   }
@@ -151,14 +158,16 @@ export class Engine {
     pl.H = [Haa, 0, pl.H[2]];
   }
 
-  _predict(t, close, vol, mus) {
+  _predict(t, close, vol, mus, dir) {
     const out = { t, c: close, vol, h: {} };
     for (const h of HORIZONS) {
       const m = mus[h];
       const w = this.weights(h);
       let mu = 0;
       for (let e = 0; e < m.length; e++) mu += w[e] * m[e];
-      const p = sigmoid(this.s.platt[h].a * mu);
+      const x = dir ? dir[h].d * DIR_SCALE : mu;
+      const p = sigmoid(this.s.platt[h].a * x);
+      const strong = dir ? dir[h].strong : Math.abs(p - 0.5) >= STRONG_EDGE;
       const q = this.model.resid[h]; // quantiles of standardised residuals at Q_LEVELS
       const scale = vol * Math.sqrt(h);
       const lo = [], hi = [];
@@ -169,8 +178,8 @@ export class Engine {
         hi.push((mu + mult * q[qj]) * scale);
       }
       const med = (mu + q[Q_LEVELS.indexOf(0.5)]) * scale;
-      out.h[h] = { mu, ret: mu * scale, med, p, lo, hi, w, mus: m };
-      this.s.pending.push([t, h, close, vol, mu, p, lo[0], hi[0], lo[1], hi[1], lo[2], hi[2], ...m]);
+      out.h[h] = { mu, ret: mu * scale, med, p, strong, lo, hi, w, mus: m };
+      this.s.pending.push([t, h, close, vol, mu, p, lo[0], hi[0], lo[1], hi[1], lo[2], hi[2], x, strong ? 1 : 0, ...m]);
     }
     return out;
   }
@@ -190,4 +199,4 @@ export class Engine {
   }
 }
 
-export const PENDING_LAYOUT = { P_T, P_H, P_C, P_VOL, P_MU, P_P, P_B, P_E };
+export const PENDING_LAYOUT = { P_T, P_H, P_C, P_VOL, P_MU, P_P, P_B, P_X, P_S, P_E };

@@ -10,6 +10,7 @@
     "pipeline": "node engine/run.mjs",
     "build": "node engine/build-site.mjs",
     "serve": "node engine/serve.mjs",
+    "backtest": "node engine/backtest.mjs",
     "test": "node --test test/*.test.mjs"
   }
 }

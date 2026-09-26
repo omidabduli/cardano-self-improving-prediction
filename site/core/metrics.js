@@ -8,11 +8,11 @@ export function emptyAgg() {
   // hit: correct direction, bs: Brier sum, ll: log-loss sum, c: band hits [50,80,95]
   // se/se0: squared error of the forecast / of "no change" (standardised units)
   // ae/ae0: absolute error of the predicted log-return / of "no change" (the typical miss)
-  // sn/sh: confident calls and their hits
+  // sn/sh: confident calls and their hits; sni/shi: the non-overlapping ones among them
   // ni/hi: non-overlapping calls (issued on a multiple of h: every hour, every 3 h, daily at
   //        00:00 UTC) and their hits. A 24-hour call made every 15 minutes is not 96 independent
   //        bets, so significance uses these only.
-  return { n: 0, nm: 0, hit: 0, bs: 0, ll: 0, c: [0, 0, 0], se: 0, se0: 0, ae: 0, ae0: 0, sn: 0, sh: 0, ni: 0, hi: 0 };
+  return { n: 0, nm: 0, hit: 0, bs: 0, ll: 0, c: [0, 0, 0], se: 0, se0: 0, ae: 0, ae0: 0, sn: 0, sh: 0, ni: 0, hi: 0, sni: 0, shi: 0 };
 }
 
 export function addResolution(a, r) {
@@ -30,7 +30,10 @@ export function addResolution(a, r) {
     const pp = Math.min(Math.max(r.p, 1e-6), 1 - 1e-6);
     a.ll += -(u ? Math.log(pp) : Math.log(1 - pp));
     if (r.strong) { a.sn++; a.sh += r.hit; }
-    if ((Math.round(r.t / 60000) + 1) % r.h === 0) { a.ni++; a.hi += r.hit; }
+    if ((Math.round(r.t / 60000) + 1) % r.h === 0) {
+      a.ni++; a.hi += r.hit;
+      if (r.strong) { a.sni++; a.shi += r.hit; }
+    }
   }
   return a;
 }
@@ -43,6 +46,7 @@ export function mergeAgg(a, b) {
     o.se += x.se; o.se0 += x.se0; o.sn += x.sn; o.sh += x.sh;
     o.ae += x.ae || 0; o.ae0 += x.ae0 || 0;
     o.ni += x.ni || 0; o.hi += x.hi || 0;
+    o.sni += x.sni || 0; o.shi += x.shi || 0;
     for (let k = 0; k < 3; k++) o.c[k] += x.c[k];
   }
   return o;
@@ -67,6 +71,10 @@ export function summarize(a) {
     mae0: a.ae0 / a.n,
     strongN: a.sn,
     strongAcc: a.sn ? a.sh / a.sn : null,
+    // confident calls, non-overlapping only (the honest version), and their z vs. a coin flip
+    sni: a.sni || 0,
+    strongAccI: a.sni ? a.shi / a.sni : null,
+    strongZ: a.sni ? (a.shi - a.sni / 2) / Math.sqrt(a.sni / 4) : null,
   };
 }
 

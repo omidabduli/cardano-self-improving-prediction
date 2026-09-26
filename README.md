@@ -18,7 +18,7 @@ And honestly, there is a joy in it that is hard to describe. When you build a mo
 
 ## What it does
 
-Every 15 minutes (at :00, :15, :30 and :45 UTC) it publishes three forecasts: ADA in 1 hour, 3 hours and 24 hours. Each one has a price, an 80% range and a probability that the price will be higher. Every forecast is committed to this repository before the outcome is known, and checked when its time comes.
+Every 15 minutes (at :00, :15, :30 and :45 UTC) it publishes three forecasts: ADA in 1 hour, 3 hours and 24 hours. Each one is a single price and a probability that the price will be higher; the strongest half of the calls are marked confident. Every forecast is committed to this repository before the outcome is known, and checked when its time comes.
 
 There is no server. When you open the page, your browser runs the published model on the live Binance feed and computes every forecast and every score up to the current minute. A GitHub Actions job is the notary: every 15 minutes it replays the same minutes with the same code and commits the official record. GitHub's own timer only fires a few times a day, so a free [cron-job.org](https://cron-job.org) job starts it at minute 1, 16, 31 and 46 of every hour. I checked that the browser and the record give the same numbers, to the last digit.
 
@@ -47,6 +47,8 @@ Six "experts" look at the market in different ways:
 | Linear Brain | A regularised regression on the signals that evolution picked |
 | Boosted Forest | Gradient-boosted trees on the same signals, for non-linear patterns |
 
+Next to them sits the **direction model**: a ridge regression and gradient-boosted trees trained only on whether the price went up or down, not by how much, on all 55 signals and the last 240 days. A model that learns the size of moves gets pushed around by a few huge swings; one that learns only the direction doesn't. It decides the up/down call. The price shown is that call times how far ADA typically moves in that time (read off the calibrated 80% range, which the experts and the online learners keep honest). I found this idea on Bitcoin, in the sister project [Bitcast](https://github.com/omidabduli/bitcoin-self-improving-prediction), and use its settings here unchanged.
+
 After every result, four things happen:
 
 1. Experts that were closer to reality get more trust, and the others get less (a Hedge ensemble).
@@ -68,18 +70,19 @@ Everything lives in `data/` and is committed by the bot:
 
 | File | What's in it |
 |---|---|
-| `predictions/YYYY-MM-DD.csv` | one row per forecast: the price, and for each horizon the predicted move (bp), P(up) and the 80% range (bp) |
+| `predictions/YYYY-MM-DD.csv` | one row per forecast: the price, and for each horizon the predicted move (bp), P(up), the 80% range (bp) and whether it was a confident call |
 | `state.json` | the learning checkpoint: trust weights, range sizes, calibration, forecasts still waiting |
 | `model.json` | all six experts, including every tree of the forest |
 | `evolution.json` | every daily tournament and the settings that won |
 | `daily/YYYY-MM.json` | scores per day and snapshots of the ensemble |
 | `fng.json` | the last 30 days of the Fear & Greed index, exactly as the record used it |
 | `status.json` | the last run, totals and a file index |
-| `backtest.json` | the 30-day simulation from launch, kept apart from the live record |
+| `backtest.json`, `backtest/YYYY-MM.csv` | the one-year walk-forward backtest: scores per day and every forecast with its outcome |
+| `warmup.json` | the 30-day warm-up simulation from launch |
 
 A forecast made at time *t* only uses models trained before *t* and data that was public at *t*. Times are UTC candle open times, so the `14:29` row is the forecast issued when that candle closed, at 14:30. Anyone can replay a checkpoint with `site/core/engine.js` and get the same numbers.
 
-The first version predicted 5, 15 and 60 minutes ahead (22 to 25 September 2026). In backtests it had a small edge at 5 minutes and almost none at 60. Live, over three days, even the 5-minute edge was hard to tell apart from a coin flip. I kept that record untouched in `data/archive/v1-minutes/`.
+The first version predicted 5, 15 and 60 minutes ahead (22 to 25 September 2026). In backtests it had a small edge at 5 minutes and almost none at 60. Live, over three days, even the 5-minute edge was hard to tell apart from a coin flip. I kept that record untouched in `data/archive/v1-minutes/`. The second version (25 to 26 September 2026) showed a price estimate and an 80% range but took its direction from the ensemble, which was a coin flip. Its record is in `data/archive/v2-ranges/`.
 
 ## Run it yourself
 
@@ -87,7 +90,8 @@ You need Node.js 22 or newer. No packages to install.
 
 ```bash
 npm test                              # unit tests: no look-ahead, model parity, the online learners
-node engine/run.mjs --bootstrap       # fetch ~107 days, train, simulate 30 days (about 3 minutes)
+node engine/run.mjs --bootstrap       # fetch ~290 days, train, simulate 30 days (about 8 minutes)
+node engine/backtest.mjs --days 365   # the one-year backtest (downloads Binance archive files, ~35 minutes)
 node engine/run.mjs                   # a normal run: replays everything since the last one
 node engine/serve.mjs                 # preview on http://localhost:8787
 ```

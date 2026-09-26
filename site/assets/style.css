@@ -115,6 +115,8 @@ section.alt{background:var(--surface)}
 .lg-live{width:9px;height:9px;border-radius:50%;border:1.5px solid var(--ink)}
 .lg-est{width:9px;height:9px;border-radius:50%;background:var(--muted)}
 .lg-band{width:18px;height:6px;border-radius:3px;background:var(--surface);border:1px solid var(--line)}
+.fc-dir{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;margin-top:10px;font-size:14px;color:var(--muted)}
+.fc-dir span:first-child{font-weight:500}
 .fc-due{margin-top:12px;font-size:12px;color:var(--muted)}
 @media (max-width:760px){
   .forecasts{grid-template-columns:1fr}
@@ -128,17 +130,15 @@ section.alt{background:var(--surface)}
 .chart text{font-family:var(--mono);font-size:11px;fill:var(--muted)}
 .chart .grid{stroke:var(--line);stroke-width:1}
 .chart .price{fill:none;stroke:var(--ink);stroke-width:1.6;stroke-linejoin:round}
-.chart .band{fill:var(--sea);fill-opacity:.16}
-.chart .fan{fill:var(--clay);fill-opacity:.12}
-.chart .fan-med{fill:none;stroke:var(--clay);stroke-width:1.4;stroke-dasharray:4 4}
-.chart .bar{stroke:var(--clay);stroke-width:2;stroke-linecap:round}
+.chart .pred{fill:none;stroke:var(--clay);stroke-width:1.8;stroke-linejoin:round}
+.chart .now-dot{fill:var(--ink)}
 .chart .dot{fill:var(--clay)}
 .chart .now-line{stroke:var(--muted);stroke-width:1;stroke-dasharray:2 4}
 .chart .lbl{fill:var(--ink-2)}
 .legend{display:flex;flex-wrap:wrap;gap:8px 24px;margin-top:12px;padding-inline:8px;font-size:13px;color:var(--muted)}
 .k{display:inline-block;width:18px;height:10px;margin-right:8px;vertical-align:0;border-radius:2px}
 .k-price{height:2px;background:var(--ink);vertical-align:3px}
-.k-band{background:color-mix(in srgb,var(--sea) 30%,transparent)}
+.k-pred{height:2px;background:var(--clay);vertical-align:3px}
 .k-now{background:color-mix(in srgb,var(--clay) 30%,transparent);border-left:2px solid var(--clay)}
 
 /* Tables: hairline rows, mono numbers, no zebra, no vertical borders */
@@ -150,6 +150,14 @@ td.num,td .num{font-family:var(--mono);font-size:14px;font-variant-numeric:tabul
 td.h{font-family:var(--serif);font-size:19px;color:var(--ink);white-space:nowrap}
 td small{display:block;color:var(--muted);font-size:12px;font-family:var(--mono)}
 .scores td.big{font-family:var(--serif);font-weight:300;font-size:26px;color:var(--ink);line-height:1.1;white-space:nowrap}
+.scores td.big small{white-space:normal;line-height:1.4;margin-top:4px}
+.months td{padding-block:10px}
+.months th.grp{color:var(--ink-2);padding-bottom:4px}
+.months tr:first-child th{border-bottom:0}
+.sub-row{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:999px;padding:3px;margin-bottom:12px}
+.seg button{font:500 13px/1 var(--sans);color:var(--ink-2);background:none;border:0;border-radius:999px;padding:8px 14px;cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
 .council td.name{color:var(--ink);font-weight:500;white-space:nowrap}
 .council td.reads{min-width:220px}
 .trust{display:flex;align-items:center;gap:8px}

@@ -1,6 +1,8 @@
-// One SVG chart: the last 24 hours of price, the 80% range each 1-hour forecast gave for it,
-// and the current 1 h / 3 h / 24 h forecasts fanning out to the right. Colours come from the
-// CSS tokens, so light and dark themes need no code.
+// One SVG chart, two lines: the price as it happened, and the prediction. On the left, each
+// point of the prediction line is what the 1-hour forecast made an hour earlier said the price
+// would be at that moment, so the two lines can be compared directly. On the right, the line
+// continues with the forecasts that are still open. Colours come from the CSS tokens, so light
+// and dark themes need no code.
 
 import { hhmm } from './format.js';
 
@@ -16,8 +18,8 @@ function el(tag, attrs, parent) {
 
 /**
  * @param {SVGSVGElement} svg
- * @param {{now:number, price:number, series:{t:number,c:number}[], band:{t:number,lo:number,hi:number}[],
- *          fc:{h:number,t:number,med:number,lo:number,hi:number}[]}} d  prices in USD, times in ms
+ * @param {{now:number, price:number, series:{t:number,c:number}[], pred:{t:number,c:number}[],
+ *          marks:{h:number,t:number,c:number}[]}} d  prices in USD, times in ms
  */
 export function drawChart(svg, d) {
   const W = svg.clientWidth || 800, Hh = svg.clientHeight || 360;
@@ -26,58 +28,47 @@ export function drawChart(svg, d) {
   if (!d.series.length || !Number.isFinite(d.price)) return;
 
   const narrow = W < 560;
-  const padL = 8, padR = narrow ? 52 : 64, padT = 16, padB = 28;
-  const t0 = d.now - 24 * H_MS, t1 = d.now + 24 * H_MS;
+  const padL = 8, padR = narrow ? 52 : 64, padT = 20, padB = 28;
+  const ahead = Math.max(3 * H_MS, ...d.marks.map((m) => m.t - d.now));
+  const t0 = d.now - 24 * H_MS, t1 = d.now + ahead;
   let lo = Infinity, hi = -Infinity;
-  for (const p of d.series) { if (p.c < lo) lo = p.c; if (p.c > hi) hi = p.c; }
-  for (const b of d.band) { if (b.lo < lo) lo = b.lo; if (b.hi > hi) hi = b.hi; }
-  for (const f of d.fc) { if (f.lo < lo) lo = f.lo; if (f.hi > hi) hi = f.hi; }
-  const pad = (hi - lo) * 0.08 || d.price * 0.01;
+  for (const p of [...d.series, ...d.pred]) { if (p.t < t0) continue; if (p.c < lo) lo = p.c; if (p.c > hi) hi = p.c; }
+  const pad = (hi - lo) * 0.1 || d.price * 0.002;
   lo -= pad; hi += pad;
   const x = (t) => padL + ((t - t0) / (t1 - t0)) * (W - padL - padR);
   const y = (c) => padT + (1 - (c - lo) / (hi - lo)) * (Hh - padT - padB);
+  const pts = (list) => list.map((p) => `${x(p.t).toFixed(1)},${y(p.c).toFixed(1)}`).join(' ');
 
   // grid: 4-5 price levels, 6-hour time ticks
   const step = niceStep((hi - lo) / 4);
   for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) {
     el('line', { class: 'grid', x1: padL, x2: W - padR, y1: y(v), y2: y(v) }, svg);
-    el('text', { x: W - padR + 8, y: y(v) + 4 }, svg).textContent = '$' + v.toFixed(step < 0.001 ? 4 : 3);
+    el('text', { x: W - padR + 8, y: y(v) + 4 }, svg).textContent = '$' + v.toLocaleString('en-US', { maximumFractionDigits: Math.max(0, -Math.floor(Math.log10(step) + 1e-9)) });
   }
   const tick = 6 * H_MS;
   for (let t = Math.ceil(t0 / tick) * tick; t <= t1; t += tick) {
     if (narrow && Math.round(t / tick) % 2) continue;
     el('text', { x: x(t), y: Hh - 8, 'text-anchor': 'middle' }, svg).textContent = hhmm(t);
   }
-
-  // band that the 1-hour forecasts gave for each past moment
-  const band = d.band.filter((b) => b.t >= t0 && b.t <= d.now);
-  if (band.length > 1) {
-    const top = band.map((b) => `${x(b.t).toFixed(1)},${y(b.hi).toFixed(1)}`);
-    const bot = band.slice().reverse().map((b) => `${x(b.t).toFixed(1)},${y(b.lo).toFixed(1)}`);
-    el('polygon', { class: 'band', points: top.concat(bot).join(' ') }, svg);
-  }
-
-  // price
-  const pts = d.series.filter((p) => p.t >= t0).map((p) => `${x(p.t).toFixed(1)},${y(p.c).toFixed(1)}`);
-  pts.push(`${x(d.now).toFixed(1)},${y(d.price).toFixed(1)}`);
-  el('polyline', { class: 'price', points: pts.join(' ') }, svg);
   el('line', { class: 'now-line', x1: x(d.now), x2: x(d.now), y1: padT, y2: Hh - padB }, svg);
+  el('text', { class: 'lbl', x: x(d.now), y: padT - 6, 'text-anchor': 'middle' }, svg).textContent = 'now';
 
-  // forecast fan from the forecast's own start to each horizon
-  const fc = d.fc.slice().sort((a, b) => a.h - b.h);
-  if (fc.length) {
-    const sx = x(d.now), sy = y(d.price);
-    const upper = fc.map((f) => `${x(f.t).toFixed(1)},${y(f.hi).toFixed(1)}`);
-    const lower = fc.slice().reverse().map((f) => `${x(f.t).toFixed(1)},${y(f.lo).toFixed(1)}`);
-    el('polygon', { class: 'fan', points: [`${sx},${sy}`, ...upper, ...lower].join(' ') }, svg);
-    el('polyline', { class: 'fan-med', points: [`${sx},${sy}`, ...fc.map((f) => `${x(f.t).toFixed(1)},${y(f.med).toFixed(1)}`)].join(' ') }, svg);
-    for (const f of fc) {
-      const fx = x(f.t);
-      el('line', { class: 'bar', x1: fx, x2: fx, y1: y(f.lo), y2: y(f.hi) }, svg);
-      el('circle', { class: 'dot', cx: fx, cy: y(f.med), r: 3.5 }, svg);
-      const label = el('text', { class: 'lbl', x: fx, y: Math.max(12, y(f.hi) - 8), 'text-anchor': f.h >= 1440 ? 'end' : 'middle' }, svg);
-      label.textContent = f.h >= 1440 ? '24 h' : `${f.h / 60} h`;
-    }
+  // prediction: one line, past and future
+  const pred = d.pred.filter((p) => p.t >= t0 && p.t <= t1);
+  if (pred.length > 1) el('polyline', { class: 'pred', points: pts(pred) }, svg);
+
+  // price as it happened
+  const series = d.series.filter((p) => p.t >= t0).concat({ t: d.now, c: d.price });
+  el('polyline', { class: 'price', points: pts(series) }, svg);
+  el('circle', { class: 'now-dot', cx: x(d.now), cy: y(d.price), r: 3.5 }, svg);
+
+  // the open forecasts: a dot and a label at 1 h, 3 h and 24 h
+  for (const m of d.marks) {
+    const mx = x(m.t), my = y(m.c);
+    el('circle', { class: 'dot', cx: mx, cy: my, r: 3.5 }, svg);
+    // 1 h and 3 h sit close together: one label below its dot, the other above
+    const below = m.h === 60;
+    el('text', { class: 'lbl', x: mx, y: below ? my + 20 : my - 10, 'text-anchor': m.t >= t1 - H_MS ? 'end' : 'middle' }, svg).textContent = m.h >= 1440 ? '24 h' : `${m.h / 60} h`;
   }
 }
 

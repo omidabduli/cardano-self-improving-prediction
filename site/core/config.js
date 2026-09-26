@@ -1,10 +1,13 @@
 // Shared configuration. Imported by both the browser app and the Node pipeline,
 // so every number that affects a prediction lives in exactly one place.
 
+// The coin being forecast, and the two other large coins whose moves feed the "lead" and
+// "peer" signal groups (feature ids rb*/re*, see features.js).
 export const SYMBOL = 'ADAUSDT';
-export const BTC_SYMBOL = 'BTCUSDT';
-export const ETH_SYMBOL = 'ETHUSDT';
+export const LEAD_SYMBOL = 'BTCUSDT';
+export const PEER_SYMBOL = 'ETHUSDT';
 export const TICK = 0.0001; // Binance ADAUSDT price tick
+export const PRICE_DIGITS = 4; // decimals shown for a price
 
 export const MINUTE = 60_000;
 export const DAY_MIN = 1440;
