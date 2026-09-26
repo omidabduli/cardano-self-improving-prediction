@@ -4,6 +4,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT } from './store.mjs';
+import { ASSET } from '../site/core/config.js';
 
 const PORT = Number(process.env.PORT || 8787);
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.csv': 'text/csv; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.webmanifest': 'application/manifest+json' };
@@ -19,4 +20,4 @@ http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store' });
     res.end(buf);
   });
-}).listen(PORT, () => console.log(`ADAptive preview on http://localhost:${PORT}`));
+}).listen(PORT, () => console.log(`${ASSET.brand} preview on http://localhost:${PORT}`));

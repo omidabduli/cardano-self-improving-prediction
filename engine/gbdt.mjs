@@ -1,5 +1,7 @@
-// Histogram gradient-boosted regression trees (squared loss), written from scratch so the
-// published trees are plain arrays the browser can evaluate (site/core/models.js gbdtPredict).
+// Histogram gradient-boosted trees, written from scratch so the published trees are plain
+// arrays the browser can evaluate (site/core/models.js gbdtPredict). Squared loss by default;
+// p.loss = 'logistic' (targets 0/1, prediction = log-odds) and per-row weights use Newton
+// leaves: value = -sum(grad) / (sum(hess) + l2).
 
 export function mulberry32(seed) {
   let a = seed >>> 0;
@@ -39,9 +41,11 @@ function makeEdges(X, D, rows, col, nBins, rng) {
  * @param {Int32Array} rows training rows
  * @param {Float64Array} y target per row index (already clipped)
  * @param {number[]} idx feature columns allowed
- * @param {object} p {trees, depth, lr, minLeaf, subsample, colsample, l2, bins}
+ * @param {object} p {trees, depth, lr, minLeaf, subsample, colsample, l2, bins, loss}
+ * @param {number} seed
+ * @param {Float64Array} [w] optional weight per row index (rescaled to mean 1 over `rows`)
  */
-export function fitGBDT(X, D, rows, y, idx, p, seed = 1) {
+export function fitGBDT(X, D, rows, y, idx, p, seed = 1, w = null) {
   const rng = mulberry32(seed);
   const n = rows.length, F = idx.length, nBins = p.bins || 32;
   const edges = idx.map((col) => makeEdges(X, D, rows, col, nBins, rng));
@@ -57,9 +61,23 @@ export function fitGBDT(X, D, rows, y, idx, p, seed = 1) {
   const trees = [];
   const histG = new Float64Array(nBins), histN = new Int32Array(nBins);
   const lam = p.l2;
+  // Newton mode (logistic loss or weights): hessians replace the row counts in gains and leaves.
+  // The default squared, unweighted mode keeps exactly the original arithmetic.
+  const logistic = p.loss === 'logistic';
+  const newton = logistic || !!w;
+  const wt = new Float64Array(n).fill(1);
+  if (w) { let sw = 0; for (let r = 0; r < n; r++) sw += w[rows[r]]; const k = n / sw; for (let r = 0; r < n; r++) wt[r] = w[rows[r]] * k; }
+  const hess = newton ? new Float64Array(n) : null;
+  const histH = newton ? new Float64Array(nBins) : null;
 
   for (let t = 0; t < p.trees; t++) {
-    for (let r = 0; r < n; r++) grad[r] = pred[r] - target[r];
+    if (logistic) {
+      for (let r = 0; r < n; r++) { const q = 1 / (1 + Math.exp(-pred[r])); grad[r] = wt[r] * (q - target[r]); hess[r] = wt[r] * Math.max(q * (1 - q), 1e-6); }
+    } else if (newton) {
+      for (let r = 0; r < n; r++) { grad[r] = wt[r] * (pred[r] - target[r]); hess[r] = wt[r]; }
+    } else {
+      for (let r = 0; r < n; r++) grad[r] = pred[r] - target[r];
+    }
     // row subsample
     let sampled = [];
     for (let r = 0; r < n; r++) if (rng() < p.subsample) sampled.push(r);
@@ -74,31 +92,38 @@ export function fitGBDT(X, D, rows, y, idx, p, seed = 1) {
     const stack = [{ node: newNode(), rows: sampled, depth: 0 }];
     while (stack.length) {
       const { node, rows: nr, depth } = stack.pop();
-      let G = 0;
+      let G = 0, Hs = 0;
       for (let k = 0; k < nr.length; k++) G += grad[nr[k]];
       const N = nr.length;
+      if (newton) for (let k = 0; k < N; k++) Hs += hess[nr[k]];
+      else Hs = N;
       let best = null;
       if (depth < p.depth && N >= 2 * p.minLeaf) {
-        const parentScore = (G * G) / (N + lam);
+        const parentScore = (G * G) / (Hs + lam);
         for (const f of feats) {
           histG.fill(0); histN.fill(0);
+          if (newton) histH.fill(0);
           const base = f * n;
-          for (let k = 0; k < N; k++) { const r = nr[k]; const b = binned[base + r]; histG[b] += grad[r]; histN[b]++; }
+          if (newton) for (let k = 0; k < N; k++) { const r = nr[k]; const b = binned[base + r]; histG[b] += grad[r]; histN[b]++; histH[b] += hess[r]; }
+          else for (let k = 0; k < N; k++) { const r = nr[k]; const b = binned[base + r]; histG[b] += grad[r]; histN[b]++; }
           const nb = edges[f].length + 1;
-          let gl = 0, nl = 0;
+          let gl = 0, nl = 0, hl = 0;
           for (let b = 0; b < nb - 1; b++) {
             gl += histG[b]; nl += histN[b];
+            if (newton) hl += histH[b];
             const nrr = N - nl;
             if (nl < p.minLeaf) continue;
             if (nrr < p.minLeaf) break;
             const gr = G - gl;
-            const gain = (gl * gl) / (nl + lam) + (gr * gr) / (nrr + lam) - parentScore;
+            const gain = newton
+              ? (gl * gl) / (hl + lam) + (gr * gr) / (Hs - hl + lam) - parentScore
+              : (gl * gl) / (nl + lam) + (gr * gr) / (nrr + lam) - parentScore;
             if (gain > 1e-9 && (!best || gain > best.gain)) best = { gain, f, b };
           }
         }
       }
       if (!best) {
-        tree.v[node] = (-G / (N + lam)) * p.lr;
+        tree.v[node] = (-G / (Hs + lam)) * p.lr;
         continue;
       }
       const base = best.f * n;

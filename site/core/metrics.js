@@ -1,38 +1,67 @@
-// Scoring. Aggregates are plain sums so they can be added across days/sessions and
-// turned into rates only for display.
+// Scoring (record schema v4). Aggregates are plain sums so they can be added across days and
+// sessions, and turned into rates only for display. What is scored is what the page shows:
+// the call from P(up) (forecast.directionOf, "no clear direction" is no call), the shown price
+// (forecast.shownForecast) and the ranges. v3's aggregates (archived with the v3 record) used
+// other definitions and must not be merged with these.
 
-import { HORIZONS } from './config.js';
+import { HORIZONS, BANDS } from './config.js';
+import { directionOf } from './forecast.js';
+
+export const METRICS_VERSION = 4;
 
 export function emptyAgg() {
-  // n: resolved, nm: resolved with a price move (ties excluded from direction stats)
-  // hit: correct direction, bs: Brier sum, ll: log-loss sum, c: band hits [50,80,95]
-  // se/se0: squared error of the forecast / of "no change" (standardised units)
-  // ae/ae0: absolute error of the predicted log-return / of "no change" (the typical miss)
-  // sn/sh: confident calls and their hits; sni/shi: the non-overlapping ones among them
-  // ni/hi: non-overlapping calls (issued on a multiple of h: every hour, every 3 h, daily at
-  //        00:00 UTC) and their hits. A 24-hour call made every 15 minutes is not 96 independent
-  //        bets, so significance uses these only.
-  return { n: 0, nm: 0, hit: 0, bs: 0, ll: 0, c: [0, 0, 0], se: 0, se0: 0, ae: 0, ae0: 0, sn: 0, sh: 0, ni: 0, hi: 0, sni: 0, shi: 0 };
+  return {
+    n: 0, // forecasts whose outcome is a real price
+    nu: 0, // outcomes unavailable (no real candle at the horizon): not scored
+    nm: 0, // ... with a price move (a tie says nothing about direction)
+    bs: 0, ll: 0, // Brier score and log loss of P(up), summed over nm (a 50% forecast scores like a coin)
+    nc: 0, hit: 0, // calls among nm (up or down; "no clear direction" is not a call) and right ones
+    nin: 0, // non-overlapping forecasts with a move (issued on a multiple of h: hourly, 3-hourly,
+    //        daily at 00:00 UTC): a 24-hour forecast made every 15 minutes is not 96 bets
+    ni: 0, hi: 0, // non-overlapping calls and right ones (significance uses these only)
+    sni: 0, shi: 0, // ... of them with a strong signal, and right ones
+    c: [0, 0, 0], // outcomes inside the 50/80/95% range
+    w: [0, 0, 0], // range widths (log-move, summed)
+    is: [0, 0, 0], // interval scores (width + 2/alpha x the miss outside the range)
+    ae: 0, se: 0, // the shown price: absolute / squared error of its log-move
+    ae0: 0, se0: 0, // "no change"
+    abv: 0, // outcomes above the shown price (exactly on it counts half)
+    aeE: 0, seE: 0, // the experts' ensemble move (not shown; kept for the record)
+    zse: 0, zse0: 0, // legacy (v3 "R^2"): ensemble vs "no change", standardised and clipped
+  };
 }
 
 export function addResolution(a, r) {
+  if (r.unavailable) { a.nu++; return a; }
   a.n++;
-  for (let k = 0; k < 3; k++) if (r.inb[k]) a.c[k]++;
-  a.se += (r.z - r.mu) ** 2;
-  a.se0 += r.z ** 2;
-  a.ae += Math.abs(r.y - r.ret);
-  a.ae0 += Math.abs(r.y);
-  if (r.hit !== null) {
+  const y = r.y;
+  for (let k = 0; k < BANDS.length; k++) {
+    if (r.inb[k]) a.c[k]++;
+    const lo = r.lo[k], hi = r.hi[k], al = 1 - BANDS[k];
+    a.w[k] += hi - lo;
+    a.is[k] += hi - lo + (2 / al) * (Math.max(0, lo - y) + Math.max(0, y - hi));
+  }
+  a.ae += Math.abs(y - r.est); a.se += (y - r.est) ** 2;
+  a.ae0 += Math.abs(y); a.se0 += y * y;
+  a.abv += y > r.est ? 1 : y === r.est ? 0.5 : 0;
+  a.aeE += Math.abs(y - r.ret); a.seE += (y - r.ret) ** 2;
+  a.zse += (r.z - r.mu) ** 2; a.zse0 += r.z ** 2;
+  if (y !== 0) {
+    const u = y > 0 ? 1 : 0;
     a.nm++;
-    a.hit += r.hit;
-    const u = r.y > 0 ? 1 : 0;
     a.bs += (r.p - u) ** 2;
     const pp = Math.min(Math.max(r.p, 1e-6), 1 - 1e-6);
     a.ll += -(u ? Math.log(pp) : Math.log(1 - pp));
-    if (r.strong) { a.sn++; a.sh += r.hit; }
-    if ((Math.round(r.t / 60000) + 1) % r.h === 0) {
-      a.ni++; a.hi += r.hit;
-      if (r.strong) { a.sni++; a.shi += r.hit; }
+    const dir = directionOf(r.p);
+    const nonOverlap = (Math.round(r.t / 60000) + 1) % r.h === 0;
+    if (nonOverlap) a.nin++;
+    if (dir !== 'neutral') {
+      const hit = (y > 0) === (dir === 'up') ? 1 : 0;
+      a.nc++; a.hit += hit;
+      if (nonOverlap) {
+        a.ni++; a.hi += hit;
+        if (r.strong) { a.sni++; a.shi += hit; }
+      }
     }
   }
   return a;
@@ -42,46 +71,51 @@ export function mergeAgg(a, b) {
   const o = emptyAgg();
   for (const x of [a, b]) {
     if (!x) continue;
-    o.n += x.n; o.nm += x.nm; o.hit += x.hit; o.bs += x.bs; o.ll += x.ll;
-    o.se += x.se; o.se0 += x.se0; o.sn += x.sn; o.sh += x.sh;
-    o.ae += x.ae || 0; o.ae0 += x.ae0 || 0;
-    o.ni += x.ni || 0; o.hi += x.hi || 0;
-    o.sni += x.sni || 0; o.shi += x.shi || 0;
-    for (let k = 0; k < 3; k++) o.c[k] += x.c[k];
+    for (const k of Object.keys(o)) {
+      if (Array.isArray(o[k])) for (let j = 0; j < o[k].length; j++) o[k][j] += (x[k] && x[k][j]) || 0;
+      else o[k] += x[k] || 0;
+    }
   }
   return o;
 }
 
-// Rates for display. Includes a z-score of the hit rate against a fair coin.
+const coinZ = (hit, n) => (n ? (hit - n / 2) / Math.sqrt(n / 4) : null);
+
+// Rates for display. The z-scores against a fair coin use non-overlapping calls only; they
+// ignore that neighbouring days share market conditions, so treat them as rough (research/
+// reports block-bootstrap intervals instead).
 export function summarize(a) {
   if (!a || !a.n) return null;
-  const acc = a.nm ? a.hit / a.nm : null;
+  const nm = a.nm || 0;
   return {
-    n: a.n,
-    nm: a.nm,
-    acc,
-    // z-test vs. a fair coin on non-overlapping calls only (honest significance)
-    zscore: a.ni ? (a.hi - a.ni / 2) / Math.sqrt(a.ni / 4) : null,
-    ni: a.ni,
-    brier: a.nm ? a.bs / a.nm : null,
-    bss: a.nm ? 1 - a.bs / a.nm / 0.25 : null,
+    n: a.n, unavailable: a.nu,
+    acc: a.nc ? a.hit / a.nc : null,
+    accI: a.ni ? a.hi / a.ni : null, ni: a.ni, zI: coinZ(a.hi, a.ni),
+    callShare: a.nin ? a.ni / a.nin : null,
+    strongAccI: a.sni ? a.shi / a.sni : null, sni: a.sni, strongZ: coinZ(a.shi, a.sni),
+    strongShare: a.nin ? a.sni / a.nin : null,
+    brier: nm ? a.bs / nm : null,
+    bss: nm ? 1 - a.bs / nm / 0.25 : null,
+    logloss: nm ? a.ll / nm : null,
+    llGain: nm ? Math.LN2 - a.ll / nm : null,
     cov: a.c.map((x) => x / a.n),
-    r2: a.se0 > 0 ? 1 - a.se / a.se0 : null,
-    mae: a.ae / a.n,
-    mae0: a.ae0 / a.n,
-    strongN: a.sn,
-    strongAcc: a.sn ? a.sh / a.sn : null,
-    // confident calls, non-overlapping only (the honest version), and their z vs. a coin flip
-    sni: a.sni || 0,
-    strongAccI: a.sni ? a.shi / a.sni : null,
-    strongZ: a.sni ? (a.shi - a.sni / 2) / Math.sqrt(a.sni / 4) : null,
+    width: a.w.map((x) => x / a.n),
+    iscore: a.is.map((x) => x / a.n),
+    mae: a.ae / a.n, mae0: a.ae0 / a.n, maeSkill: a.ae0 > 0 ? 1 - a.ae / a.ae0 : null,
+    rmse: Math.sqrt(a.se / a.n), rmse0: Math.sqrt(a.se0 / a.n), mseSkill: a.se0 > 0 ? 1 - a.se / a.se0 : null,
+    above: a.abv / a.n,
+    ensMseSkill: a.se0 > 0 ? 1 - a.seE / a.se0 : null,
+    legacyR2: a.zse0 > 0 ? 1 - a.zse / a.zse0 : null,
   };
 }
 
 export function roundAgg(a) {
-  const r = (x) => Number(x.toFixed(4));
-  const r6 = (x) => Number(x.toFixed(6));
-  return { ...a, bs: r(a.bs), ll: r(a.ll), se: r(a.se), se0: r(a.se0), ae: r6(a.ae), ae0: r6(a.ae0), c: [...a.c] };
+  const o = {};
+  for (const [k, v] of Object.entries(a)) {
+    if (Array.isArray(v)) o[k] = v.map((x) => (Number.isInteger(x) ? x : Number(x.toPrecision(10))));
+    else o[k] = Number.isInteger(v) ? v : Number(v.toPrecision(10));
+  }
+  return o;
 }
 
 export function emptyHorizonAggs() {

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>ADAptive · Cardano price forecast, checked in public</title>
-  <meta name="description" content="Where the Cardano (ADA) price is likely to be in 1 hour, 3 hours and 24 hours. A new prediction every 15 minutes; every one is logged and checked in public.">
+  <meta name="description" content="How likely the Cardano (ADA) price is to be higher in 1 hour and 3 hours. A new forecast every 15 minutes; every one is logged and checked in public.">
   <meta property="og:title" content="ADAptive · Cardano price forecast, checked in public">
   <meta property="og:description" content="ADA in 1 hour, 3 hours and 24 hours: one price, renewed every 15 minutes and scored in public.">
   <meta property="og:type" content="website">
@@ -37,8 +37,8 @@
 
 <header class="hero" id="top"><div class="wrap">
   <p class="eyebrow">ADA / USDT · live from Binance · <span id="liveState" class="live">connecting</span></p>
-  <h1>Where Cardano is <em>likely</em> to trade next.</h1>
-  <p class="lede">Every 15 minutes a small self-correcting model predicts the Cardano (ADA) price 1 hour, 3 hours and 24 hours ahead. Every prediction is logged, then checked in public.</p>
+  <h1>Which way Cardano is <em>likely</em> to go next.</h1>
+  <p class="lede">Every 15 minutes a small self-correcting model says how likely the Cardano (ADA) price is to be higher in 1 hour, 3 hours and 24 hours. Every call is logged, then checked in public.</p>
 
   <div class="now">
     <span class="now-price" id="price">—</span>
@@ -49,13 +49,14 @@
     <div class="fc"><p class="eyebrow">Loading the model…</p></div>
   </div>
   <p class="facts" id="issueLine">&nbsp;</p>
+  <p class="fc-note" id="fcNote"></p>
   <p class="banner" id="banner" hidden></p>
 </div></header>
 
 <section class="block alt" id="chart"><div class="wrap">
   <div class="sec-head">
     <div><p class="eyebrow">Chart</p><h2>Prediction <em>vs.</em> reality</h2></div>
-    <p>The light line is what the price did. The orange line is the prediction: on the left, what the model said one hour earlier (dashed where it comes from the backtest, before the live record began); on the right, where it expects the price to go next.</p>
+    <p>The orange line is the predicted price and the other line is what the price did. On the left, the orange line is what the forecast made one hour earlier said (dashed where it comes from the backtest, before the live record began); on the right, it runs through the latest forecasts. The best price estimate turned out to be today's price, so what the model adds is the direction: the triangles are the hourly 1-hour calls, filled when they came true.</p>
   </div>
   <figure class="figure">
     <svg id="chartSvg" class="chart" role="img" aria-label="ADA price over the last 24 hours and the model's prediction"></svg>
@@ -63,6 +64,7 @@
       <span><i class="k k-price"></i>Price</span>
       <span><i class="k k-pred"></i>Prediction</span>
       <span><i class="k k-bt"></i>Prediction in the backtest, before the live record began</span>
+      <span><i class="k k-call"><b class="right">▲</b> <b class="wrong">▽</b></i>1-hour call: filled when it came true</span>
     </figcaption>
   </figure>
 </div></section>
@@ -70,7 +72,7 @@
 <section class="block" id="record"><div class="wrap">
   <div class="sec-head">
     <div><p class="eyebrow">Record · <span id="liveSince">live</span></p><h2>How good it <em>really</em> is</h2></div>
-    <p>How often the model called the direction right. 50% is a coin flip; the goal is 54%. Confident calls are the half where its signal is strongest. The past-year test replayed the same system over the last 12 months, training only on data from before each day. Its settings were chosen on Bitcoin, so this Cardano year is a fully untouched test.</p>
+    <p>How often the model called the direction right; 50% is a coin flip. Strong-signal calls are the ones whose signal beat the median of the previous 7 days' forecasts, about half of them. The past-year test replayed the same system over the last 12 months, training only on data from before each day. Its direction settings were chosen on Bitcoin, but these months were looked at while reviewing the system; the year before them, never used to tune anything, is in the <a href="https://github.com/omidabduli/cardano-self-improving-prediction/blob/main/docs/EXPERIMENTS.md">experiment report</a>.</p>
   </div>
   <div class="table-wrap">
     <table class="scores" id="scores">
@@ -98,9 +100,9 @@
   <ol class="steps">
     <li><span class="yr">01</span><h3>Look at the market</h3><p>The last week of minute-by-minute prices for Cardano, Bitcoin and Ethereum, plus the daily crypto Fear &amp; Greed index.</p></li>
     <li><span class="yr">02</span><h3>Call the direction</h3><p>A model that only learns whether the price went up or down, not by how much, so a few huge swings can't drown out the pattern.</p></li>
-    <li><span class="yr">03</span><h3>Put a number on it</h3><p>The call and how far ADA has been moving lately give one predicted price for 1 hour, 3 hours and 24 hours.</p></li>
-    <li><span class="yr">04</span><h3>Check every prediction</h3><p>When its time comes, each prediction is compared with the real price and scored in public.</p></li>
-    <li><span class="yr">05</span><h3>Learn every night</h3><p>At midnight UTC every model is retrained on the latest data. New settings only replace the old ones if they are clearly better on days they haven't seen.</p></li>
+    <li><span class="yr">03</span><h3>Say only what it knows</h3><p>A probability that the price will be higher, calibrated so that 55% means 55%. For the size of the move, nothing I tested beat simply today's price, so that is the price estimate. At 24 hours the direction model never beat a coin flip, so it makes no call there.</p></li>
+    <li><span class="yr">04</span><h3>Check every prediction</h3><p>When its time comes, each prediction is compared with the real price, exactly as it was shown, and scored in public. Forecasts filled in later after an outage are marked and kept out of the score.</p></li>
+    <li><span class="yr">05</span><h3>Keep learning</h3><p>Every outcome updates how much each model is trusted and how sure the calls are, with recent weeks weighing more. At midnight UTC every model is retrained; new settings only replace the old ones if they are clearly better on days they haven't seen.</p></li>
   </ol>
 </div></section>
 
