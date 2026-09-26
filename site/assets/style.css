@@ -1,4 +1,4 @@
-/* ADAptive · quiet editorial. Tokens first, then this page's few components. */
+/* Bitcast · quiet editorial. Tokens first, then this page's few components. */
 :root{
   --bg:#FAF9F5; --surface:#F0EEE6; --raised:#FFFFFF;
   --ink:#141413; --ink-2:#3D3D3A; --muted:#6E6C64; --line:#E3DFD3;
@@ -131,6 +131,7 @@ section.alt{background:var(--surface)}
 .chart .grid{stroke:var(--line);stroke-width:1}
 .chart .price{fill:none;stroke:var(--ink);stroke-width:1.6;stroke-linejoin:round}
 .chart .pred{fill:none;stroke:var(--clay);stroke-width:1.8;stroke-linejoin:round}
+.chart .pred-bt{stroke-dasharray:5 4;opacity:.8}
 .chart .now-dot{fill:var(--ink)}
 .chart .dot{fill:var(--clay)}
 .chart .now-line{stroke:var(--muted);stroke-width:1;stroke-dasharray:2 4}
@@ -139,6 +140,7 @@ section.alt{background:var(--surface)}
 .k{display:inline-block;width:18px;height:10px;margin-right:8px;vertical-align:0;border-radius:2px}
 .k-price{height:2px;background:var(--ink);vertical-align:3px}
 .k-pred{height:2px;background:var(--clay);vertical-align:3px}
+.k-bt{height:0;border-top:2px dashed var(--clay);vertical-align:3px;background:none}
 .k-now{background:color-mix(in srgb,var(--clay) 30%,transparent);border-left:2px solid var(--clay)}
 
 /* Tables: hairline rows, mono numbers, no zebra, no vertical borders */

@@ -55,13 +55,14 @@
 <section class="block alt" id="chart"><div class="wrap">
   <div class="sec-head">
     <div><p class="eyebrow">Chart</p><h2>Prediction <em>vs.</em> reality</h2></div>
-    <p>The light line is what the price did. The orange line is the prediction: on the left, what the model said one hour earlier; on the right, where it expects the price to go next.</p>
+    <p>The light line is what the price did. The orange line is the prediction: on the left, what the model said one hour earlier (dashed where it comes from the backtest, before the live record began); on the right, where it expects the price to go next.</p>
   </div>
   <figure class="figure">
     <svg id="chartSvg" class="chart" role="img" aria-label="ADA price over the last 24 hours and the model's prediction"></svg>
     <figcaption class="legend">
       <span><i class="k k-price"></i>Price</span>
       <span><i class="k k-pred"></i>Prediction</span>
+      <span><i class="k k-bt"></i>Prediction in the backtest, before the live record began</span>
     </figcaption>
   </figure>
 </div></section>

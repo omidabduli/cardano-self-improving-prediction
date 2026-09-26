@@ -10,6 +10,9 @@
 // Market data comes from Binance's monthly/daily archive files on data.binance.vision
 // (cached in .cache/klines), sentiment from alternative.me.
 //
+// It ends where the live record begins (data/status.json liveSince), so the backtest and the
+// live record together form one unbroken line of forecasts.
+//
 //   node engine/backtest.mjs [--days 365] [--evolve]
 import fs from 'node:fs';
 import path from 'node:path';
@@ -21,7 +24,8 @@ import { EXPERTS, expertPredictions, directionScores } from '../site/core/models
 import { Engine, freshState } from '../site/core/engine.js';
 import { emptyHorizonAggs, addResolution, roundAgg } from '../site/core/metrics.js';
 import { makeDataset, fitExperts, residQuantiles, trainRows, evolve, fitDirection, GEN0, DIRECTION } from './train.mjs';
-import { ROOT, writeJSON } from './store.mjs';
+import { ROOT, writeJSON, readJSON } from './store.mjs';
+import { fetchKlines } from './binance.mjs';
 
 const args = process.argv.slice(2);
 const opt = (name, def) => { const i = args.indexOf(name); return i >= 0 ? Number(args[i + 1]) : def; };
@@ -84,7 +88,10 @@ export async function klines(symbol, fromMs, toMs) {
     }
   }
   const out = [];
-  for (const f of files) for (const k of parseCsv(execFileSync('unzip', ['-p', f], { maxBuffer: 1 << 28 }).toString())) if (k.t >= fromMs && k.t <= toMs) out.push(k);
+  let last = fromMs - MINUTE;
+  for (const f of files) for (const k of parseCsv(execFileSync('unzip', ['-p', f], { maxBuffer: 1 << 28 }).toString())) if (k.t >= fromMs && k.t <= toMs) { out.push(k); if (k.t > last) last = k.t; }
+  // the newest hours aren't archived yet: the REST API fills them in
+  if (last < toMs) for (const k of await fetchKlines(symbol, last + MINUTE, toMs)) out.push(k);
   return out;
 }
 
@@ -97,9 +104,12 @@ const bps = (x, d) => (x * 1e4).toFixed(d);
 
 async function main() {
   const started = Date.now();
-  // end at the last full UTC day that the archive has
-  const end = Math.floor(Date.now() / 86400000) * 86400000 - 86400000 - MINUTE;
-  const from = end + MINUTE - (DAYS + TRAIN_DAYS) * 86400000;
+  // end at the last minute before the live record starts (the bootstrap's checkpoint)
+  const liveSince = Date.parse(readJSON('status.json', {}).liveSince || '');
+  const end = Number.isFinite(liveSince) ? liveSince - 2 * MINUTE : Math.floor(Date.now() / 86400000) * 86400000 - 86400000 - MINUTE;
+  // whole UTC days, the last one ending at `end` (the daily refits happen at 00:00 UTC, as live)
+  const startT = Math.floor(end / 86400000) * 86400000 - (DAYS - 1) * 86400000;
+  const from = startT - TRAIN_DAYS * 86400000;
   log(`backtest ${DAYS} days to ${isoMinute(end)}${EVOLVE ? ' with daily evolution' : ''}; downloading ${isoDay(from)} ..`);
   const [a, b, c, fng] = await Promise.all([klines(SYMBOL, from, end), klines(LEAD_SYMBOL, from, end), klines(PEER_SYMBOL, from, end), fearGreed()]);
   log(`data: ${a.length} ${SYMBOL} + ${b.length} ${LEAD_SYMBOL} + ${c.length} ${PEER_SYMBOL} candles, ${fng.length} Fear & Greed days`);
@@ -109,15 +119,16 @@ async function main() {
   log(`features ready in ${((Date.now() - started) / 1000).toFixed(0)} s`);
 
   const ids = EXPERTS.map((e) => e.id);
-  const s0 = ds.n - DAYS * DAY_MIN;
+  const s0 = Math.round((startT - S.t[0]) / MINUTE);
+  const BLOCKS = Math.ceil((ds.n - s0) / DAY_MIN);
   const eng = new Engine({ experts: ids.map((id) => ({ id })), resid: null }, freshState(ids, S.t[s0 - 1]));
   const byDay = {};
   const rows = {}; // month -> csv lines
   const preds = new Map(); // issue time -> {c, h: {h: {...}}}
   const gens = [];
   let cfg = structuredClone(GEN0);
-  for (let d = 0; d < DAYS; d++) {
-    const s = s0 + d * DAY_MIN, e = d === DAYS - 1 ? ds.n : s + DAY_MIN;
+  for (let d = 0; d < BLOCKS; d++) {
+    const s = s0 + d * DAY_MIN, e = Math.min(ds.n, s + DAY_MIN);
     const t0 = Date.now();
     if (EVOLVE && d > 0) {
       // production evolves on data up to the start of the day only
@@ -144,7 +155,13 @@ async function main() {
         }
       }
     }
-    if (d % 30 === 0 || d === DAYS - 1) log(`  day ${d + 1}/${DAYS} ${isoDay(S.t[s])} (${((Date.now() - t0) / 1000).toFixed(1)} s)`);
+    if (d % 30 === 0 || d === BLOCKS - 1) log(`  day ${d + 1}/${DAYS} ${isoDay(S.t[s])} (${((Date.now() - t0) / 1000).toFixed(1)} s)`);
+  }
+
+  // forecasts whose longer horizons haven't come due by the end: written with what is known
+  for (const [t, p] of [...preds].sort((a, b) => a[0] - b[0])) {
+    if (!Object.keys(p.y).length) continue;
+    (rows[isoDay(t).slice(0, 7)] ||= []).push([isoMinute(t), p.c, ...HORIZONS.flatMap((h) => [bps(p.h[h].med, 1), p.h[h].p.toFixed(4), p.h[h].s ? 1 : 0, bps(p.h[h].lo, 1), bps(p.h[h].hi, 1), h in p.y ? bps(p.y[h], 1) : ''])].join(','));
   }
 
   // public record

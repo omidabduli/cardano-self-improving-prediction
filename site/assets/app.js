@@ -26,6 +26,8 @@ const repo = (() => {
 const app = {
   status: null, model: null, state: null, evo: null, backtest: null, months: {},
   official: new Map(), live: new Map(), csvClose: new Map(),
+  // backtest forecasts from just before the live record began (drawn dashed in the chart)
+  btPred: new Map(),
   ada: new Map(), btc: new Map(), eth: new Map(), fng: [],
   price: null, engine: null, lastPred: null,
   // scored in this browser since the published checkpoint: added to the official totals so
@@ -101,6 +103,30 @@ async function loadPublished() {
   status.months.slice(-3).forEach((m, i) => { if (months[i]) app.months[m] = months[i]; });
   for (const txt of csvs) if (txt) parseCSV(txt);
   for (const t of [...app.live.keys()]) if (t <= state.t) app.live.delete(t);
+}
+
+// The backtest runs right up to the live record, so its last day of forecasts continues the
+// prediction line to the left of the first live one. Only the newest monthly file is needed
+// (plus the one before early in a month).
+async function loadBacktestTail() {
+  const ms = app.backtest?.months || [];
+  if (!ms.length) return;
+  const since = now() - 26 * 3600e3;
+  for (const m of ms.slice(-2).reverse()) {
+    let text;
+    try { text = await getText(`data/backtest/${m}.csv`); } catch { continue; }
+    const lines = text.trim().split('\n');
+    let older = false;
+    for (let i = 1; i < lines.length; i++) {
+      const c = lines[i].split(',');
+      const t = Date.parse(c[0] + ':00Z');
+      if (!(t >= since)) { older = true; continue; }
+      // columns per horizon: est_bp, p_up, confident, lo80_bp, hi80_bp, actual_bp
+      app.btPred.set(t, { t, c: Number(c[1]), h: { 60: { p: Number(c[3]), strong: c[4] === '1', lo80: Number(c[5]) / 1e4, hi80: Number(c[6]) / 1e4 } } });
+    }
+    if (older) break; // this file already reaches back far enough
+  }
+  renderChart();
 }
 
 async function loadCandles(fromMs) {
@@ -283,19 +309,25 @@ function renderChart() {
   for (const [t, k] of app.ada) if (t >= t0 && (Math.round(t / MINUTE) % 5 === 0)) series.push({ t: t + MINUTE, c: k.c });
   if (series.length < 10) for (const [t, c] of app.csvClose) if (t >= t0) series.push({ t: t + MINUTE, c });
   series.sort((a, b) => a.t - b.t);
-  // prediction line: every 1-hour prediction at the moment it was (or will be) due, then the
-  // latest 3-hour and 24-hour predictions
+  // prediction line, past: every 1-hour prediction at the moment it came due
   const pred = [];
   const all = new Map([...app.official, ...app.live]);
   for (const [t, p] of all) {
     const at = issuedAt(t) + 60 * MINUTE;
-    if (at >= t0 && at <= tNow + 60 * MINUTE) pred.push({ t: at, c: p.c * Math.exp(estMove(p.h[60])) });
+    if (at >= t0 && at <= tNow) pred.push({ t: at, c: p.c * Math.exp(estMove(p.h[60])) });
   }
   pred.sort((a, b) => a.t - b.t);
+  const firstLive = Math.min(...[...all.keys()]);
+  const past = [];
+  for (const [t, p] of app.btPred) {
+    const at = issuedAt(t) + 60 * MINUTE;
+    if (t < firstLive && at >= t0) past.push({ t: at, c: p.c * Math.exp(estMove(p.h[60])) });
+  }
+  past.sort((a, b) => a.t - b.t);
   const last = latestPred();
+  // ahead: from the price now through the latest 1 h, 3 h and 24 h predictions
   const marks = last ? HORIZONS.map((h) => ({ h, t: issuedAt(last.t) + h * MINUTE, c: last.c * Math.exp(estMove(last.h[h])) })) : [];
-  for (const m of marks) if (m.h > 60) pred.push({ t: m.t, c: m.c });
-  drawChart($('chartSvg'), { now: tNow, price: app.price ?? series.at(-1)?.c, series, pred, marks });
+  drawChart($('chartSvg'), { now: tNow, price: app.price ?? series.at(-1)?.c, series, pred, past, marks });
 }
 
 function totals(h) {
@@ -421,6 +453,7 @@ async function boot() {
   // request answers, and the forecast once the browser has caught up with the market
   renderStatic();
   renderMinute();
+  loadBacktestTail();
   fetchPrice(SYMBOL).then((p) => { app.price ??= p; renderPrice(); renderChart(); }).catch(() => {});
   await startLive();
   setInterval(tick, 1000);
