@@ -30,6 +30,16 @@ Before launching this version I tested it on 300 days of history, walking forwar
 - **The price estimate is about as good as "no change".** Typical misses are 0.54% at 1 hour, 0.93% at 3 hours and 2.9% at 24 hours. Some of my earlier versions were worse than simply saying "the price stays where it is", and I fixed that.
 - **The range is the part that works.** How far ADA is likely to move *is* predictable. The 50%, 80% and 95% ranges held 50%, 80% and 95% of the time.
 
+Then, working on the Bitcoin version, I found one idea that changed the direction result: **train a model only on whether the price went up or down, not on by how much.** I chose its settings on Bitcoin and used them here without changing anything, so none of Cardano's past year was used to pick them. That makes this a clean test. Over the full year (25 Sep 2025 to 24 Sep 2026), refitting every day on past data only:
+
+| Cardano, one year | 1 hour | 3 hours | 24 hours |
+|---|---|---|---|
+| Confident calls right (independent) | **53.5%** of 4,427 | **54.3%** of 1,508 | 49.7% of 173 |
+| All calls right (independent) | 51.7% of 8,504 | 52.2% of 2,880 | 48.1% of 362 |
+| 80% range held | 80.0% | 80.0% | 79.9% |
+
+A confident call is one where the direction model's signal is stronger than its usual, so about half of all calls. The 1-hour result is 4.7 standard deviations away from a coin flip. It was stronger in the first half of the year than in the second (3 hours: 56.5%, then 52.0%), which is a reminder that patterns fade. At 24 hours there is still no edge. The goal stays public: 54% on confident calls at 1 and 3 hours.
+
 I could have hidden this and shown a nice accuracy number. I think that would go against the whole point. The page shows the real score, and it counts only forecasts that don't overlap, so a single lucky move isn't counted a hundred times. That is a Taleb lesson too: don't let luck look like skill.
 
 If a real pattern shows up, the system is built to find it, and the record will show it. Until then, it is honest about what it doesn't know. This is an experiment, not financial advice.
