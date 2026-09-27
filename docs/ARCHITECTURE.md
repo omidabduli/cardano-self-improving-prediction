@@ -211,18 +211,23 @@ These rules replace v3's habit of quietly writing zeros:
 ## Migration from v3 to v4
 
 v4 changes the features (schema f2), the engine state, the record's columns and the metrics.
-Nothing from v3 can be continued, so v4 starts a new record:
+Nothing from v3 can be continued, so v4 starts a new record. The release carries it:
 
-1. Archive the v3 record unchanged: `data/` minus the backtest → `data/archive/v3-direction/`,
-   with a README saying what it is. Never edit it.
-2. Run `node engine/run.mjs --bootstrap` (fresh models, a 30-day warm-up, `liveSince` = now) and
-   commit `data/`.
-3. Rerun the backtest for the page: `node engine/backtest.mjs --evolve`. It ends where the live
-   record begins.
-4. Push. The workflow deploys the site and the record continues every 15 minutes.
+1. In a copy of the repository, `node engine/run.mjs --bootstrap` makes a fresh record (models, a
+   30-day warm-up, the checkpoint, `liveSince`). `node engine/backtest.mjs --evolve` then adds the
+   one-year backtest ending where that record begins.
+2. That fresh record goes into `data/launch/`, with a file `ARCHIVE_AS` naming the archive folder
+   (`v3-direction`) and a `data/archive/v3-direction/README.md` saying what the old record was.
+   The release adds only these new files, and the bot never changes them, so it can be merged
+   whenever it has been reviewed.
+3. After the merge, the first pipeline run (`switchToLaunch` in `engine/run.mjs`):
+   - moves the current record, unchanged, into `data/archive/v3-direction/`;
+   - puts the launch in its place;
+   - replays every minute since the launch. Those forecasts are replays and stay out of the live
+     score.
 
-A later schema change follows the same steps. The engine and pipeline refuse to mix versions,
-so a forgotten step fails visibly instead of silently corrupting the record.
+A later schema change follows the same steps. The engine and the pipeline refuse to mix versions,
+so a forgotten step fails visibly instead of quietly corrupting the record.
 
 ## Shared-code check
 

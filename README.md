@@ -53,7 +53,7 @@ Two things didn't survive the test at all:
 - **24 hours.** The 24-hour direction model was right less than half the time in every period, on both coins. So the page makes no call at 24 hours. The model keeps running in the background, and the record will show if that changes.
 - **The price.** No formula for the size of the move beat simply today's price, not even the careful ones. So the price estimate on the page is today's price, and what the model adds is the direction.
 
-The "past-year test" on the page replays the whole system, with these settings, over the twelve months before the live record began. Those months were looked at during the review, so treat it as a check that the system runs as described, not as an untouched test.
+The "past-year test" on the page replays the whole system, with these settings and the daily evolution, over the twelve months before the live record began (27 September 2025 to 26 September 2026): 53.9% on strong-signal calls at 1 hour and 54.3% at 3 hours (52.2% and 52.0% of all calls). Those months were looked at during the review, so treat it as a check that the system runs as described, not as an untouched test.
 
 I could have hidden all this and shown a nice accuracy number. I think that would go against the whole point. The page shows the real score, and it counts only forecasts that don't overlap, so a single lucky move isn't counted a hundred times. That is a Taleb lesson too: don't let luck look like skill. This is an experiment, not financial advice.
 

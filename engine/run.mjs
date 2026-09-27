@@ -23,8 +23,10 @@ import { Engine, ORIGIN, STATE_VERSION } from '../site/core/engine.js';
 import { emptyHorizonAggs, addResolution, mergeAgg, roundAgg, METRICS_VERSION } from '../site/core/metrics.js';
 import { fetchKlines, fetchFearGreed, lastHost } from './binance.mjs';
 import { makeDataset, evolve, buildModel, warmup, GEN0 } from './train.mjs';
-import { readJSON, writeJSON, isoDay, isoMinute, appendPredictionRows, listPredictionDays, listMonths, ROOT, RECORD_SCHEMA, PER_HORIZON } from './store.mjs';
+import { readJSON, writeJSON, isoDay, isoMinute, appendPredictionRows, listPredictionDays, listMonths, ROOT, DATA, RECORD_SCHEMA, PER_HORIZON } from './store.mjs';
 import { execSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 
 const args = process.argv.slice(2);
 const flag = (f) => args.includes(f);
@@ -75,8 +77,36 @@ function brainSnapshot(eng) {
   return o;
 }
 
+// A release that changes the record's format ships a complete fresh record in data/launch/ (a
+// --bootstrap and the backtest, made before the release). The first run that finds it moves the
+// current record, unchanged, to data/archive/<the name in data/launch/ARCHIVE_AS>/ and puts the
+// launch in its place. The release itself then only adds files the bot never changes, so it can
+// be merged whenever it has been reviewed. Safe to repeat after a crash half-way.
+const LIVE_ITEMS = ['predictions', 'daily', 'backtest', 'model.json', 'state.json', 'status.json', 'evolution.json', 'fng.json', 'warmup.json', 'backtest.json'];
+export function switchToLaunch(data = DATA) {
+  const L = path.join(data, 'launch');
+  if (!fs.existsSync(L)) return null;
+  const name = fs.readFileSync(path.join(L, 'ARCHIVE_AS'), 'utf8').trim();
+  if (!/^[a-z0-9-]+$/.test(name)) throw new Error(`data/launch/ARCHIVE_AS: bad archive name "${name}"`);
+  const A = path.join(data, 'archive', name);
+  fs.mkdirSync(A, { recursive: true });
+  for (const f of LIVE_ITEMS) {
+    const src = path.join(data, f), dst = path.join(A, f);
+    if (fs.existsSync(src) && !fs.existsSync(dst)) fs.renameSync(src, dst);
+  }
+  for (const f of fs.readdirSync(L)) {
+    if (f === 'ARCHIVE_AS') continue;
+    const dst = path.join(data, f);
+    if (!fs.existsSync(dst)) fs.renameSync(path.join(L, f), dst);
+  }
+  fs.rmSync(L, { recursive: true, force: true });
+  return name;
+}
+
 async function main() {
   const started = Date.now();
+  const switched = switchToLaunch();
+  if (switched) log(`::notice::started the new record from data/launch; the previous one is in data/archive/${switched}/`);
   let model = readJSON('model.json');
   let state = readJSON('state.json');
   const status = readJSON('status.json', {});
@@ -294,8 +324,10 @@ async function main() {
   log(`done in ${((Date.now() - started) / 1000).toFixed(1)} s`);
 }
 
-main().catch((e) => {
-  console.error(e);
-  console.log(`::error::pipeline failed: ${e.message}`);
-  process.exitCode = 1;
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(ROOT, 'engine', 'run.mjs')) {
+  main().catch((e) => {
+    console.error(e);
+    console.log(`::error::pipeline failed: ${e.message}`);
+    process.exitCode = 1;
+  });
+}
