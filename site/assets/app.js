@@ -264,7 +264,7 @@ function renderPrice() {
 
 const pctText = (r, d = 2) => `${r > 0 ? '+' : r < 0 ? '\u2212' : '\u00b1'}${Math.abs(r * 100).toFixed(d)}%`;
 
-const STRONG_TITLE = 'Its signal is among the stronger half of the last 7 days\' forecasts';
+const STRONG_TITLE = 'Stronger than half of the last 7 days\' forecasts';
 
 // One forecast box. The price shown is exactly the number the record stores and scores
 // (forecast.js). With SHOW_MOVE off (no price formula beat "no change" in testing) the box leads
@@ -279,7 +279,7 @@ function forecastBox(pred, h) {
   if (!SHOW_MOVE) {
     const shadow = SHADOW_HORIZONS.includes(h);
     const head = shadow ? 'No reliable signal' : call ? `${up ? '▲ Up' : '▼ Down'}, ${(pr * 100).toFixed(0)}% likely` : 'No clear direction';
-    const note = shadow ? `The ${h / 60}-hour model never beat a coin flip in testing, so it makes no call.<br>` : '';
+    const note = shadow ? 'No better than a coin flip in testing.<br>' : '';
     return `<div class="fc">
     <h3 class="fc-h">In ${H_NAME[h]}</h3>
     <p class="fc-call ${shadow ? 'flat' : cls}">${head}</p>
@@ -315,7 +315,7 @@ function renderForecasts() {
   const t0 = issuedAt(pred.t);
   if (app.incompatible) { $('forecasts').innerHTML = `<div class="fc"><p class="eyebrow">${app.incompatible}</p></div>`; return; }
   $('forecasts').innerHTML = HORIZONS.map((h) => forecastBox(pred, h)).join('');
-  if (!SHOW_MOVE) $('fcNote').textContent = 'The price estimate is today\'s price: in a year of data no one had used before, no formula for the size of the move beat it. What the model adds is the direction.';
+  if (!SHOW_MOVE) $('fcNote').textContent = 'The price estimate is just today\'s price. The model only guesses the direction.';
   const next = issuedAt(pred.t) + CADENCE * MINUTE;
   const stale = issuedAt(pred.t) <= tNow - CADENCE * MINUTE;
   $('issueLine').innerHTML = `<span>${stale ? 'Last published forecast, made' : 'Made'} at <b>${F.hhmm(t0)}</b> from ${F.price(pred.c, PRICE_DIGITS)}</span>`
@@ -371,7 +371,7 @@ const pct = (x, d = 1) => (x === null || x === undefined ? '—' : `${(x * 100).
 function scoreCell(a, empty) {
   const s = a && summarize(a);
   if (!s || !s.ni) {
-    if (s && s.callShare === 0) return `<td class="big">no call<small>no reliable direction signal: the probability stays at 50%</small></td>`;
+    if (s && s.callShare === 0) return `<td class="big">no call<small>no reliable signal</small></td>`;
     return `<td class="big">—<small>${empty}</small></td>`;
   }
   const miss = !SHOW_MOVE || s.maeSkill === null ? '' : ` · price miss ${s.maeSkill >= 0 ? `${(s.maeSkill * 100).toFixed(2)}% smaller` : `${(-s.maeSkill * 100).toFixed(2)}% larger`} than “no change”`;
@@ -381,15 +381,15 @@ function scoreCell(a, empty) {
 function renderScores() {
   const b = app.backtest, keys = b?.schema?.metrics === 4 ? Object.keys(b.days || {}) : [];
   $('scores').querySelector('tbody').innerHTML = HORIZONS.map((h) => {
-    if (SHADOW_HORIZONS.includes(h)) return `<tr><td class="h">${H_SHORT[h]}</td><td class="big" colspan="2">no call<small>At ${H_NAME[h]} the direction model never beat a coin flip in testing, so the page makes no call. It keeps running in the background, and its record decides if it comes back.</small></td></tr>`;
+    if (SHADOW_HORIZONS.includes(h)) return `<tr><td class="h">${H_SHORT[h]}</td><td class="big" colspan="2">no call<small>Never beat a coin flip in testing, so no call. It still runs in the background.</small></td></tr>`;
     const bt = keys.reduce((a, d) => mergeAgg(a, b.days[d][h]), null);
     return `<tr><td class="h">${H_SHORT[h]}</td>${scoreCell(totals(h), 'first results after ' + H_NAME[h])}${scoreCell(bt, 'no test yet')}</tr>`;
   }).join('');
   const s = app.status;
   const replayed = s?.totals?.replay ? HORIZONS.reduce((n, h) => n + (s.totals.replay[h]?.n || 0), 0) : 0;
   $('recordNote').textContent = (s ? `Live record updated ${F.ago(Date.parse(s.updatedAt))}. ` : '')
-    + 'Each call counts once: one per hour, per 3 hours or per day, so a single lucky move is never counted twice. A forecast within half a point of 50% is no call and is not counted.'
-    + (replayed ? ` ${F.num(replayed)} forecasts were computed later than their time (a delayed or missed run); they are in the record but not in these numbers.` : '');
+    + 'Each hour (or 3 hours) counts once. Calls close to 50% are not counted.'
+    + (replayed ? ` ${F.num(replayed)} late forecasts are left out.` : '');
   if (s?.liveSince) $('liveSince').textContent = `live since ${F.dateShort(Date.parse(s.liveSince))}`;
 }
 
