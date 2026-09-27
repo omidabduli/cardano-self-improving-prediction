@@ -13,17 +13,17 @@
 // It ends where the live record begins (data/status.json liveSince), so the backtest and the
 // live record together form one unbroken line of forecasts.
 //
-//   node engine/backtest.mjs [--days 365] [--evolve]
+//   node engine/backtest.mjs [--days 365] [--evolve] [--end 2026-09-26T12:29]
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { HORIZONS, DAY_MIN, MINUTE, SYMBOL, LEAD_SYMBOL, PEER_SYMBOL, isIssue } from '../site/core/config.js';
+import { HORIZONS, DAY_MIN, MINUTE, SYMBOL, LEAD_SYMBOL, PEER_SYMBOL, PRICE_DIGITS, ASSET, isIssue } from '../site/core/config.js';
 import { buildSeries } from '../site/core/candles.js';
-import { D } from '../site/core/features.js';
+import { D, FEATURE_SCHEMA } from '../site/core/features.js';
 import { EXPERTS, expertPredictions, directionScores } from '../site/core/models.js';
-import { Engine, freshState } from '../site/core/engine.js';
-import { emptyHorizonAggs, addResolution, roundAgg } from '../site/core/metrics.js';
-import { makeDataset, fitExperts, residQuantiles, trainRows, evolve, fitDirection, GEN0, DIRECTION } from './train.mjs';
+import { Engine, freshState, ORIGIN } from '../site/core/engine.js';
+import { emptyHorizonAggs, addResolution, roundAgg, METRICS_VERSION } from '../site/core/metrics.js';
+import { makeDataset, fitExperts, residQuantiles, trainRows, evolve, fitDirection, GEN0, DIRECTION, DIRECTION_LIVE } from './train.mjs';
 import { ROOT, writeJSON, readJSON } from './store.mjs';
 import { fetchKlines } from './binance.mjs';
 
@@ -32,9 +32,9 @@ const opt = (name, def) => { const i = args.indexOf(name); return i >= 0 ? Numbe
 const DAYS = opt('--days', 365);
 const EVOLVE = args.includes('--evolve');
 const TRAIN_DAYS = Math.max(60, DIRECTION.window) + 2 + 8; // longest training window + the 24 h target gap + feature warm-up
-// The direction model's settings were picked on Bitcoin (see train.mjs DIRECTION), so every day
-// of this backtest is an untouched check.
-const TUNE_END = null;
+// The direction model's settings were chosen on the days up to this one only (null: on the
+// sister project's coin), see train.mjs DIRECTION.
+const TUNE_END = ASSET.directionTunedUntil;
 const CACHE = path.join(ROOT, '.cache', 'klines');
 const log = (...a) => console.log(...a);
 const isoDay = (ms) => new Date(ms).toISOString().slice(0, 10);
@@ -102,11 +102,24 @@ export async function fearGreed() {
 
 const bps = (x, d) => (x * 1e4).toFixed(d);
 
+// Backtest CSV, per horizon: the shown price and its move, P(up), the call (up / down / neutral),
+// strong signal (1/0), the model's own P(up) and the shrunk implied move (not shown, kept to be
+// re-tested), the experts' ensemble move (not shown), the 80% range, and what happened (empty =
+// not yet due or no real price at the horizon).
+export const BT_COLS = ['price', 'est_bp', 'p_up', 'dir', 'strong', 'p_model', 'imp_bp', 'ens_bp', 'lo80_bp', 'hi80_bp', 'actual_bp'];
+function csvLine(t, p) {
+  return [isoMinute(t), p.c, ...HORIZONS.flatMap((h) => {
+    const x = p.h[h], y = p.y[h];
+    return [x.price.toFixed(PRICE_DIGITS), bps(x.est, 2), x.p.toFixed(6), x.direction, x.strong ? 1 : 0, x.pModel.toFixed(6), bps(x.shrunk, 2), bps(x.ret, 2), bps(x.lo[1], 1), bps(x.hi[1], 1), y === undefined || y === null ? '' : bps(y, 1)];
+  })].join(',');
+}
+
 async function main() {
   const started = Date.now();
-  // end at the last minute before the live record starts (the bootstrap's checkpoint)
+  // end at the last minute before the live record starts (the bootstrap's checkpoint), or --end
   const liveSince = Date.parse(readJSON('status.json', {}).liveSince || '');
-  const end = Number.isFinite(liveSince) ? liveSince - 2 * MINUTE : Math.floor(Date.now() / 86400000) * 86400000 - 86400000 - MINUTE;
+  const endArg = args.includes('--end') ? Date.parse(args[args.indexOf('--end') + 1] + 'Z') : NaN;
+  const end = Number.isFinite(endArg) ? endArg : Number.isFinite(liveSince) ? liveSince - 2 * MINUTE : Math.floor(Date.now() / 86400000) * 86400000 - 86400000 - MINUTE;
   // whole UTC days, the last one ending at `end` (the daily refits happen at 00:00 UTC, as live)
   const startT = Math.floor(end / 86400000) * 86400000 - (DAYS - 1) * 86400000;
   const from = startT - TRAIN_DAYS * 86400000;
@@ -136,21 +149,21 @@ async function main() {
       ({ cfg } = evolve(sub, cfg, { seed: Math.floor(S.t[s] / 86400000), log: () => {} }));
       gens.push({ day: isoDay(S.t[s]), cfg: structuredClone(cfg) });
     }
-    const model = { experts: fitExperts(ds, s, cfg, 1 + d), resid: residQuantiles(ds, trainRows(ds, s, 30)), direction: fitDirection(ds, s, 1 + d) };
+    const model = { experts: fitExperts(ds, s, cfg, 1 + d), resid: residQuantiles(ds, trainRows(ds, s, 30)), direction: fitDirection(ds, s, 1 + d, DIRECTION_LIVE) };
     eng.model = model;
     for (let i = s; i < e; i++) {
       const issue = isIssue(S.t[i]);
       const mus = issue ? expertPredictions(model, ds.X, D, i) : null;
-      const { resolved, pred } = eng.step(S.t[i], S.c[i], ds.vol[i], mus, issue ? directionScores(model, ds.X, D, i) : null);
-      if (pred) preds.set(pred.t, { c: pred.c, h: Object.fromEntries(HORIZONS.map((h) => [h, { med: pred.h[h].med, p: pred.h[h].p, s: pred.h[h].strong, lo: pred.h[h].lo[1], hi: pred.h[h].hi[1] }])), y: {} });
+      const { resolved, pred } = eng.step(S.t[i], S.c[i], ds.vol[i], mus, issue ? directionScores(model, ds.X, D, i) : null, { real: !S.syn[i], origin: ORIGIN.sim });
+      if (pred) preds.set(pred.t, { c: pred.c, h: pred.h, y: {} });
       for (const r of resolved) {
         const dk = isoDay(r.t);
         addResolution((byDay[dk] ||= emptyHorizonAggs())[r.h], r);
         const p = preds.get(r.t);
         if (!p) continue;
-        p.y[r.h] = r.y;
+        p.y[r.h] = r.unavailable ? null : r.y;
         if (Object.keys(p.y).length === HORIZONS.length) {
-          (rows[dk.slice(0, 7)] ||= []).push([isoMinute(r.t), p.c, ...HORIZONS.flatMap((h) => [bps(p.h[h].med, 1), p.h[h].p.toFixed(4), p.h[h].s ? 1 : 0, bps(p.h[h].lo, 1), bps(p.h[h].hi, 1), bps(p.y[h], 1)])].join(','));
+          (rows[dk.slice(0, 7)] ||= []).push(csvLine(r.t, p));
           preds.delete(r.t);
         }
       }
@@ -161,20 +174,24 @@ async function main() {
   // forecasts whose longer horizons haven't come due by the end: written with what is known
   for (const [t, p] of [...preds].sort((a, b) => a[0] - b[0])) {
     if (!Object.keys(p.y).length) continue;
-    (rows[isoDay(t).slice(0, 7)] ||= []).push([isoMinute(t), p.c, ...HORIZONS.flatMap((h) => [bps(p.h[h].med, 1), p.h[h].p.toFixed(4), p.h[h].s ? 1 : 0, bps(p.h[h].lo, 1), bps(p.h[h].hi, 1), h in p.y ? bps(p.y[h], 1) : ''])].join(','));
+    (rows[isoDay(t).slice(0, 7)] ||= []).push(csvLine(t, p));
   }
 
   // public record
   const dir = path.join(ROOT, 'data', 'backtest');
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
-  const header = 'issued_utc,price,' + HORIZONS.map((h) => `${h / 60}h_est_bp,${h / 60}h_p_up,${h / 60}h_confident,${h / 60}h_lo80_bp,${h / 60}h_hi80_bp,${h / 60}h_actual_bp`).join(',');
+  const header = 'issued_utc,price,' + HORIZONS.map((h) => BT_COLS.map((c) => `${h / 60}h_${c}`).join(',')).join(',');
   for (const [m, lines] of Object.entries(rows)) fs.writeFileSync(path.join(dir, `${m}.csv`), header + '\n' + lines.join('\n') + '\n');
   const days = {};
   for (const [dk, agg] of Object.entries(byDay)) days[dk] = Object.fromEntries(HORIZONS.map((h) => [h, roundAgg(agg[h])]));
+  const tuned = TUNE_END
+    ? `The direction model's settings were chosen on this coin's days up to ${TUNE_END}, so those days are not an independent test, and the days after it were looked at during the September 2026 review.`
+    : `The direction model's settings were chosen on ${ASSET.sister.brand}'s coin (Bitcoin), not on these days; the days after 24 May 2026 were looked at during the September 2026 review.`;
   writeJSON('backtest.json', {
-    note: `Walk-forward backtest over ${DAYS} days: each day the experts and the direction model were refit on earlier data only${EVOLVE ? ' and the daily evolution ran as in production' : ''}, then the full online system (trust weights, conformal ranges, calibration) was stepped minute by minute. The direction model's settings were picked on Bitcoin (the sister project Bitcast) and used unchanged, so no Cardano day was used to choose them. Every forecast is in data/backtest/. The live record is what counts.`,
+    note: `Walk-forward backtest over ${DAYS} days: each day the models were refit on earlier data only${EVOLVE ? ' and the daily evolution ran as in production' : ''}, then the full online system (trust weights, ranges, calibration, the shown price's shrinkage) was stepped minute by minute. ${tuned} The untouched test is the year before (docs/EXPERIMENTS.md) and, from now on, the live record. Every forecast is in data/backtest/.`,
     tuneEnd: TUNE_END,
+    schema: { features: FEATURE_SCHEMA, metrics: METRICS_VERSION, columns: BT_COLS },
     from: isoMinute(S.t[s0]),
     to: isoMinute(S.t[ds.n - 1]),
     evolve: EVOLVE,

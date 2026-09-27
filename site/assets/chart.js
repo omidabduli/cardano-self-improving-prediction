@@ -1,9 +1,10 @@
 // One SVG chart, two lines: the price as it happened, and the prediction. On the left, each
 // point of the prediction line is what the 1-hour forecast made an hour earlier said the price
-// would be at that moment, so the two lines can be compared directly. On the right, the line
-// starts at the price now and runs through the latest 1 h, 3 h and 24 h predictions. Before the live record began, the line
-// shows the backtest's forecasts for those hours, dashed. Colours come from the CSS tokens, so
-// light and dark themes need no code.
+// would be at that moment, so the two lines can be compared directly; before the live record
+// began, the line shows the backtest's forecasts, dashed. Small triangles on it are the hourly
+// 1-hour calls (up or down), filled when they came true. On the right, the line starts at the
+// price now and runs through the latest 1 h, 3 h and 24 h predictions. Colours come from the
+// CSS tokens, so light and dark themes need no code.
 
 import { hhmm } from './format.js';
 
@@ -20,7 +21,8 @@ function el(tag, attrs, parent) {
 /**
  * @param {SVGSVGElement} svg
  * @param {{now:number, price:number, series:{t:number,c:number}[], pred:{t:number,c:number}[],
- *          past?:{t:number,c:number}[], marks:{h:number,t:number,c:number}[]}} d  prices in USD, times in ms
+ *          past?:{t:number,c:number}[], calls?:{t:number,c:number,up:boolean,right:boolean}[],
+ *          marks:{h:number,t:number,c:number,label?:string}[]}} d  prices in USD, times in ms
  */
 export function drawChart(svg, d) {
   const W = svg.clientWidth || 800, Hh = svg.clientHeight || 360;
@@ -66,6 +68,14 @@ export function drawChart(svg, d) {
   const series = d.series.filter((p) => p.t >= t0).concat({ t: d.now, c: d.price });
   el('polyline', { class: 'price', points: pts(series) }, svg);
 
+  // the hourly 1-hour calls, where they came due: ▲ up, ▼ down; filled = came true
+  for (const k of d.calls || []) {
+    if (k.t < t0 || k.t > d.now) continue;
+    const cx = x(k.t), cy = y(k.c), s = narrow ? 3.5 : 4.5;
+    const tri = k.up ? `${cx},${cy - s} ${cx - s},${cy + s * 0.8} ${cx + s},${cy + s * 0.8}` : `${cx},${cy + s} ${cx - s},${cy - s * 0.8} ${cx + s},${cy - s * 0.8}`;
+    el('polygon', { class: `call ${k.right ? 'right' : 'wrong'}`, points: tri }, svg);
+  }
+
   // ahead: one line from the price now through the open predictions
   const open = [...d.marks].sort((a, b) => a.t - b.t).filter((m) => m.t > d.now);
   if (open.length) el('polyline', { class: 'pred pred-ahead', points: pts([{ t: d.now, c: d.price }, ...open]) }, svg);
@@ -78,7 +88,7 @@ export function drawChart(svg, d) {
     el('circle', { class: 'dot', cx: mx, cy: my, r: 3.5 }, svg);
     // 1 h and 3 h sit close together: one label below its dot, the other above
     const below = m.h === 60;
-    el('text', { class: 'lbl', x: mx, y: below ? my + 20 : my - 10, 'text-anchor': m.t >= t1 - H_MS ? 'end' : 'middle' }, svg).textContent = m.h >= 1440 ? '24 h' : `${m.h / 60} h`;
+    el('text', { class: 'lbl', x: mx, y: below ? my + 20 : my - 10, 'text-anchor': m.t >= t1 - H_MS ? 'end' : 'middle' }, svg).textContent = m.label || (m.h >= 1440 ? '24 h' : `${m.h / 60} h`);
   }
 }
 

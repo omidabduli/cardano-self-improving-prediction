@@ -47,21 +47,27 @@ export function standardizer(X, D, rows, idx) {
  * @param {Object<string, Float64Array>} Y target arrays indexed by row (already clipped)
  * @param {number|Object<string, number>} lambda L2 penalty, or one per target key (intercept
  *                          penalised too: we never want to learn drift)
+ * @param {Float64Array} [weights] optional weight per row index (e.g. recency); rescaled to mean 1
+ *                          over `rows`, so lambda keeps its meaning
  */
-export function fitRidge(X, D, rows, idx, Y, lambda) {
+export function fitRidge(X, D, rows, idx, Y, lambda, weights = null) {
   const d = idx.length, m = d + 1;
   const { mean, std } = standardizer(X, D, rows, idx);
   const A = new Float64Array(m * m);
   const keys = Object.keys(Y);
   const B = keys.map(() => new Float64Array(m));
   const v = new Float64Array(m);
-  v[d] = 1;
+  let wScale = 1;
+  if (weights) { let sw = 0; for (const i of rows) sw += weights[i]; wScale = rows.length / sw; }
   for (const i of rows) {
     const off = i * D;
+    const wi = weights ? weights[i] * wScale : 1;
     for (let j = 0; j < d; j++) {
       let x = (X[off + idx[j]] - mean[j]) / std[j];
       v[j] = x > 5 ? 5 : x < -5 ? -5 : x;
     }
+    v[d] = 1;
+    if (weights) { const sq = Math.sqrt(wi); for (let a = 0; a < m; a++) v[a] *= sq; }
     for (let a = 0; a < m; a++) {
       const va = v[a];
       if (va === 0) continue;
@@ -69,7 +75,7 @@ export function fitRidge(X, D, rows, idx, Y, lambda) {
       for (let b = 0; b <= a; b++) A[ra + b] += va * v[b];
     }
     for (let k = 0; k < keys.length; k++) {
-      const y = Y[keys[k]][i];
+      const y = weights ? Y[keys[k]][i] * Math.sqrt(wi) : Y[keys[k]][i];
       const bk = B[k];
       for (let a = 0; a < m; a++) bk[a] += v[a] * y;
     }

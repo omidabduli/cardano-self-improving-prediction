@@ -1,8 +1,8 @@
 // Binance public market data (no API key). Tries several hosts because the main API is
 // geo-restricted in some regions while data-api.binance.vision is not.
 
-import { REST_HOSTS, MINUTE } from '../site/core/config.js';
-import { parseKline } from '../site/core/candles.js';
+import { REST_HOSTS, MINUTE, ASSET } from '../site/core/config.js';
+import { parseKline, mergeFearGreed } from '../site/core/candles.js';
 
 let preferred = 0;
 export let lastHost = null;
@@ -16,7 +16,7 @@ async function getJSON(path) {
     try {
       const ctl = new AbortController();
       const timer = setTimeout(() => ctl.abort(), 15000);
-      const res = await fetch(host + path, { signal: ctl.signal, headers: { 'User-Agent': 'adaptive-predictor' } });
+      const res = await fetch(host + path, { signal: ctl.signal, headers: { 'User-Agent': ASSET.userAgent } });
       clearTimeout(timer);
       if (res.ok) {
         preferred = REST_HOSTS.indexOf(host);
@@ -55,11 +55,12 @@ export async function fetchKlines(symbol, startMs, endMs, { concurrency = 6 } = 
 }
 
 /**
- * Daily crypto Fear & Greed index (alternative.me, free, no key) as [{t, v}], oldest first.
- * Falls back to the copy the pipeline published last time, so a flaky API never changes a
- * forecast: the browser reads the same published copy.
+ * Daily crypto Fear & Greed index (alternative.me, free, no key) as [{t, v, seen?, rev?}], oldest
+ * first: the recorded copy (data/fng.json) with the new days merged in (candles.mergeFearGreed:
+ * a recorded value is never replaced). If the API fails, the recorded copy is used as is, so a
+ * flaky API never changes a forecast; the browser reads the same published copy.
  */
-export async function fetchFearGreed(days, fallback = []) {
+export async function fetchFearGreed(days, recorded = [], now = Date.now(), { backfill = false } = {}) {
   try {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), 15000);
@@ -67,11 +68,9 @@ export async function fetchFearGreed(days, fallback = []) {
     clearTimeout(timer);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const rows = (await res.json()).data.map((d) => ({ t: Number(d.timestamp) * 1000, v: Number(d.value) }));
-    const m = new Map(fallback.map((x) => [x.t, x]));
-    for (const x of rows) if (Number.isFinite(x.t) && Number.isFinite(x.v)) m.set(x.t, x);
-    return [...m.values()].sort((a, b) => a.t - b.t);
+    return mergeFearGreed(recorded, rows, now, { backfill });
   } catch (e) {
     console.log(`::warning::Fear & Greed unavailable (${e.message}); using the published copy`);
-    return fallback;
+    return recorded;
   }
 }

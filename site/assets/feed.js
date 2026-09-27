@@ -53,18 +53,15 @@ export async function serverClockOffset() {
 }
 
 /**
- * Daily Fear & Greed values [{t, v}]: the copy the pipeline published (so the browser sees
- * exactly what the record used) merged with the newest days straight from alternative.me.
+ * Daily Fear & Greed values [{t, v, seen?}] exactly as the pipeline recorded them (data/fng.json),
+ * so the browser computes the same features as the record. (Asking alternative.me directly could
+ * give a value the pipeline hadn't seen yet, and the page would disagree with the record.)
  */
 export async function fetchFearGreed(publishedUrl) {
-  const m = new Map();
-  const add = (rows) => { for (const x of rows) if (Number.isFinite(x.t) && Number.isFinite(x.v)) m.set(x.t, x); };
-  await Promise.all([
-    fetch(publishedUrl, { cache: 'no-store' }).then((r) => (r.ok ? r.json() : [])).then(add).catch(() => {}),
-    fetch('https://api.alternative.me/fng/?limit=10').then((r) => r.json())
-      .then((j) => add(j.data.map((d) => ({ t: Number(d.timestamp) * 1000, v: Number(d.value) })))).catch(() => {}),
-  ]);
-  return [...m.values()].sort((a, b) => a.t - b.t);
+  const r = await fetch(publishedUrl, { cache: 'no-store' });
+  if (!r.ok) throw new Error(`${publishedUrl}: HTTP ${r.status}`);
+  const rows = await r.json();
+  return rows.filter((x) => Number.isFinite(x.t) && Number.isFinite(x.v)).sort((a, b) => a.t - b.t);
 }
 
 /** Closed and open 1m klines for [startMs, endMs]. */

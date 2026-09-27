@@ -1,12 +1,13 @@
 // Training, walk-forward validation, daily evolution and warm-up simulation.
 
 import { HORIZONS, MAX_H, Z_CLIP, DAY_MIN, Q_LEVELS, isIssue } from '../site/core/config.js';
-import { computeFeatures, targets, featureIndices, GROUP_NAMES, WARMUP, D, FEATURES } from '../site/core/features.js';
+import { computeFeatures, targets, featureIndices, GROUP_NAMES, WARMUP, D, FEATURES, FEATURE_SCHEMA } from '../site/core/features.js';
 import { EXPERTS, ridgePredict, gbdtPredict, expertPredictions, directionScores } from '../site/core/models.js';
 import { Engine, freshState } from '../site/core/engine.js';
 import { emptyHorizonAggs, addResolution } from '../site/core/metrics.js';
 import { fitRidge } from './ridge.mjs';
 import { fitGBDT, compactForest, mulberry32 } from './gbdt.mjs';
+import { fitLogistic } from './logistic.mjs';
 
 export const SPECIALIST_GROUPS = { swing: ['trend', 'range'], btc: ['btc', 'eth'], crowd: ['flow', 'activity', 'sentiment'] };
 // Training uses every ROW_STEP-th minute: neighbouring rows of 1-24 h targets are near-copies.
@@ -31,11 +32,17 @@ export function makeDataset(S) {
   return { S, X, vol, Z, n: S.t.length, _clip: {} };
 }
 
-// Rows in [a, b) usable for learning: complete features, real candle, all targets known.
+// Rows in [a, b) usable for learning: complete features from real inputs (vol is NaN off-stride
+// and on rows with filled-in inputs, see features.js), and every horizon's outcome a real price.
 export function rowsIn(ds, a, b) {
   const out = [];
   const lo = Math.max(a, WARMUP), hi = Math.min(b, ds.n - MAX_H);
-  for (let i = lo; i < hi; i++) if (Number.isFinite(ds.vol[i]) && !ds.S.syn[i]) out.push(i); // vol is NaN off-stride
+  for (let i = lo; i < hi; i++) {
+    if (!Number.isFinite(ds.vol[i]) || ds.S.syn[i]) continue;
+    let ok = true;
+    for (const h of HORIZONS) if (!Number.isFinite(ds.Z[h][i])) { ok = false; break; }
+    if (ok) out.push(i);
+  }
   return Int32Array.from(out);
 }
 
@@ -299,14 +306,33 @@ export function evolve(ds, prev, { seed, folds = EVOLVE.folds, nLinear = 8, nFor
 
 // ---------- direction model ----------
 
-// Chosen in a walk-forward search on Bitcoin (the sister project Bitcast), 24 Sep 2025 .. 24 May
-// 2026 only, and used unchanged here: no Cardano data was used to pick them.
-// a ridge and a boosted-tree model on the sign of the move, all signals, 240-day window.
+// Chosen in a walk-forward search on Bitcoin (Bitcast), 24 Sep 2025 .. 24 May 2026 only, and used
+// unchanged for Cardano (ADAptive): a ridge and a boosted-tree model on the sign of the move, all
+// signals, 240-day window.
 export const DIRECTION = {
+  kind: 'pair',
   window: 240,
   lambda: 1e5, // ridge penalty x h/60
   forest: { trees: 150, depth: 4, lr: 0.03, minLeaf: 300, subsample: 0.5, colsample: 0.6, l2: 50 },
 };
+
+// The challengers compared in the September 2026 review (research/stage1.mjs). Fixed before any
+// of their results were seen, and kept small: a shorter window, recency weighting, a regularised
+// logistic regression and a modest boosted classifier. The logistic penalty is the ridge
+// penalty / 4, the same strength for weak signals (the logistic Hessian near p = 0.5 is X'X / 4).
+export const DIRECTION_CANDIDATES = {
+  pair240: DIRECTION,
+  pair120: { ...DIRECTION, window: 120 },
+  pairRW: { ...DIRECTION, halfLifeDays: 60 },
+  logit240: { kind: 'logit', window: 240, lambda: 2.5e4 },
+  gbc240: { kind: 'gbc', window: 240, forest: { trees: 150, depth: 3, lr: 0.05, minLeaf: 300, subsample: 0.5, colsample: 0.6, l2: 12.5, loss: 'logistic' } },
+};
+
+// What production fits (buildModel, warmup, the backtest): the incumbent at 1 and 3 hours; at 24
+// hours, where the page shows "no reliable signal" (config.SHADOW_HORIZONS), its ridge half alone
+// runs in the background: it beat the full model there, though not a coin (docs/EXPERIMENTS.md,
+// rules 5 and 6).
+export const DIRECTION_LIVE = { ...DIRECTION, perHorizon: { 1440: { kind: 'ridge' } } };
 
 function signTargets(ds) {
   if (!ds._sign) {
@@ -316,38 +342,86 @@ function signTargets(ds) {
   return ds._sign;
 }
 
-// Fit the direction model for a first prediction at minute index s (see models.directionScores).
+// Exponential recency weights (weight 1/2 at halfLifeDays before the newest usable row).
+function recencyWeights(ds, rows, halfLifeDays) {
+  const w = new Float64Array(ds.n);
+  const newest = rows[rows.length - 1];
+  for (const i of rows) w[i] = Math.pow(2, -(newest - i) / (halfLifeDays * DAY_MIN));
+  return w;
+}
+
+const rmsOn = (sample, f) => { let s = 0; for (const i of sample) s += f(i) ** 2; return Math.sqrt(s / sample.length) || 1; };
+const r7 = (x) => Number(x.toPrecision(7));
+const roundLin = (m) => ({ idx: m.idx, mean: m.mean.map(r7), std: m.std.map(r7), w: m.w.map(r7), b: r7(m.b) });
+
+/**
+ * Fit a direction model for a first prediction at minute index s (see models.directionScores).
+ * Every kind's score is scaled by its RMS on the training window, so scores are in "typical
+ * signal" units (~1); thr = the median |score| on that window (v3's "confident" line, kept for
+ * comparison only).
+ *   pair:  mean of a ridge and a boosted-tree regression on the sign of the move (v3)
+ *   ridge: the ridge half of the pair alone
+ *   logit: L2 logistic regression (log-odds)
+ *   gbc:   boosted classifier, logistic loss (log-odds, centred on the window)
+ * cfg.perHorizon = {h: {kind}} gives a horizon its own kind (stored in that horizon's entry).
+ */
 export function fitDirection(ds, s, seed = 1, cfg = DIRECTION) {
   const rows = trainRows(ds, s, cfg.window);
   if (rows.length < 1000) return null;
   const Y = signTargets(ds);
   const all = Array.from({ length: D }, (_, j) => j);
-  const out = { window: cfg.window, h: {} };
+  const kind = cfg.kind || 'pair';
+  const w = cfg.halfLifeDays ? recencyWeights(ds, rows, cfg.halfLifeDays) : null;
+  const sample = [];
+  for (let j = 0; j < rows.length; j += 20) sample.push(rows[j]);
+  const out = { kind, window: cfg.window, h: {} };
   for (const h of HORIZONS) {
-    const ridge = fitRidge(ds.X, D, rows, all, { y: Y[h] }, cfg.lambda * hScale(h)).y;
-    let mean = 0;
-    for (const i of rows) mean += Y[h][i];
-    mean /= rows.length;
-    const y = new Float64Array(ds.n);
-    for (const i of rows) y[i] = Y[h][i] - mean; // no up/down bias: only patterns
-    const gbdt = compactForest(fitGBDT(ds.X, D, rows, y, all, cfg.forest, seed + h));
-    const sample = [];
-    for (let j = 0; j < rows.length; j += 20) sample.push(rows[j]);
-    let sa = 0, sb = 0;
-    const a = [], b = [];
-    for (const i of sample) { a.push(ridgePredict(ridge, ds.X, i * D)); b.push(gbdtPredict(gbdt, ds.X, i * D)); }
-    for (let k = 0; k < sample.length; k++) { sa += a[k] ** 2; sb += b[k] ** 2; }
-    sa = Math.sqrt(sa / sample.length) || 1; sb = Math.sqrt(sb / sample.length) || 1;
-    const absD = sample.map((_, k) => Math.abs(0.5 * (a[k] / sa + b[k] / sb))).sort((x, z) => x - z);
-    const r = (x) => Number(x.toPrecision(7));
-    out.h[h] = {
-      ridge: { idx: ridge.idx, mean: ridge.mean.map(r), std: ridge.std.map(r), w: ridge.w.map(r), b: r(ridge.b) },
-      gbdt,
-      sa: r(sa), sb: r(sb),
-      thr: r(absD[absD.length >> 1]),
-    };
+    let m;
+    const kh = (cfg.perHorizon && cfg.perHorizon[h] && cfg.perHorizon[h].kind) || kind;
+    if (kh === 'ridge') {
+      m = { kind: 'ridge', ridge: roundLin(fitRidge(ds.X, D, rows, all, { y: Y[h] }, cfg.lambda * hScale(h), w).y) };
+      m.sa = r7(rmsOn(sample, (i) => ridgePredict(m.ridge, ds.X, i * D)));
+    } else if (kh === 'pair') {
+      const ridge = fitRidge(ds.X, D, rows, all, { y: Y[h] }, cfg.lambda * hScale(h), w).y;
+      let mean = 0;
+      for (const i of rows) mean += Y[h][i];
+      mean /= rows.length;
+      const y = new Float64Array(ds.n);
+      for (const i of rows) y[i] = Y[h][i] - mean; // no up/down bias: only patterns
+      const gbdt = compactForest(fitGBDT(ds.X, D, rows, y, all, cfg.forest, seed + h, w));
+      m = { ridge: roundLin(ridge), gbdt };
+      m.sa = r7(rmsOn(sample, (i) => ridgePredict(m.ridge, ds.X, i * D)));
+      m.sb = r7(rmsOn(sample, (i) => gbdtPredict(m.gbdt, ds.X, i * D)));
+    } else if (kh === 'logit') {
+      const y01 = new Float64Array(ds.n);
+      for (const i of rows) y01[i] = Y[h][i] > 0 ? 1 : 0;
+      m = { lin: roundLin(fitLogistic(ds.X, D, rows, all, y01, cfg.lambda * hScale(h))) };
+      m.sa = r7(rmsOn(sample, (i) => ridgePredict(m.lin, ds.X, i * D)));
+    } else if (kh === 'gbc') {
+      const y01 = new Float64Array(ds.n);
+      for (const i of rows) y01[i] = Y[h][i] > 0 ? 1 : 0;
+      const f = fitGBDT(ds.X, D, rows, y01, all, cfg.forest, seed + h, w);
+      const gbdt = compactForest(f);
+      let mean = 0;
+      for (const i of sample) mean += gbdtPredict(gbdt, ds.X, i * D);
+      gbdt.base = r7(-mean / sample.length); // no up/down bias: only patterns
+      m = { gbdt };
+      m.sb = r7(rmsOn(sample, (i) => gbdtPredict(gbdt, ds.X, i * D)));
+    } else throw new Error('unknown direction kind ' + kh);
+    const absD = sample.map((i) => Math.abs(directionScore(m, kh, ds.X, i * D))).sort((x, z) => x - z);
+    m.thr = r7(absD[absD.length >> 1]);
+    out.h[h] = m;
   }
   return out;
+}
+
+// The score of one fitted direction model on a feature row (mirrors models.directionScores).
+export function directionScore(m, kind, X, off) {
+  if (m.kind) kind = m.kind;
+  if (kind === 'ridge') return ridgePredict(m.ridge, X, off) / m.sa;
+  if (kind === 'logit') return ridgePredict(m.lin, X, off) / m.sa;
+  if (kind === 'gbc') return gbdtPredict(m.gbdt, X, off) / m.sb;
+  return 0.5 * (ridgePredict(m.ridge, X, off) / m.sa + gbdtPredict(m.gbdt, X, off) / m.sb);
 }
 
 // ---------- model assembly ----------
@@ -356,13 +430,14 @@ export function buildModel(ds, cfg, meta) {
   const s = ds.n; // first minute this model will predict is the one after the data
   const experts = fitExperts(ds, s, cfg, meta.seed || 1);
   const resid = residQuantiles(ds, trainRows(ds, s, 30));
-  const direction = fitDirection(ds, s, meta.seed || 1);
+  const direction = fitDirection(ds, s, meta.seed || 1, DIRECTION_LIVE);
   return {
-    v: 1,
+    v: 2,
     id: meta.id,
     trainedAt: meta.trainedAt,
     dataEnd: ds.S.t[ds.n - 1],
     generation: meta.generation,
+    featureSchema: FEATURE_SCHEMA,
     features: FEATURES,
     experts: experts.map(roundExpert),
     resid,
@@ -399,7 +474,7 @@ export function warmup(ds, cfg, days, { log = console.log, seed = 1 } = {}) {
     const s = s0 + d * DAY_MIN, e = d === days - 1 ? ds.n : s + DAY_MIN;
     const t0 = Date.now();
     const experts = fitExperts(ds, s, cfg, seed + d);
-    const model = { experts: experts.map(roundExpert), resid: residQuantiles(ds, trainRows(ds, s, 30)), direction: fitDirection(ds, s, seed + d) };
+    const model = { experts: experts.map(roundExpert), resid: residQuantiles(ds, trainRows(ds, s, 30)), direction: fitDirection(ds, s, seed + d, DIRECTION_LIVE) };
     eng.model = model;
     for (let i = s; i < e; i++) {
       const issue = isIssue(ds.S.t[i]);

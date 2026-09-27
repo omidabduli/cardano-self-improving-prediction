@@ -2,14 +2,14 @@
 // (z units) for every horizon. Training lives in /engine (Node only); this file only
 // needs to evaluate what the pipeline published in data/model.json.
 
-import { HORIZONS } from './config.js';
+import { HORIZONS, ASSET } from './config.js';
 
 export const EXPERTS = [
   { id: 'rw', name: 'The Skeptic', role: 'Random walk: always says "no change". The baseline every other expert must beat.', icon: 'skeptic' },
   { id: 'swing', name: 'Trend Reader', role: 'Momentum and reversal from 15 minutes to 3 days, and where the price sits in its recent range.', icon: 'swing' },
-  { id: 'btc', name: 'Market Watcher', role: 'Bets that ADA catches up with moves Bitcoin and Ethereum just made.', icon: 'btc' },
+  { id: 'btc', name: 'Market Watcher', role: `Bets that ${ASSET.coin} catches up with moves ${ASSET.lead} and ${ASSET.peer} just made.`, icon: 'btc' },
   { id: 'crowd', name: 'Crowd Reader', role: 'Buying and selling pressure, trading activity and the crypto Fear & Greed index.', icon: 'micro' },
-  { id: 'linear', name: 'Linear Brain', role: 'Regularised regression on the signal groups evolution picked (at launch: price, Bitcoin, Ethereum). Evolved daily.', icon: 'linear' },
+  { id: 'linear', name: 'Linear Brain', role: `Regularised regression on the signal groups evolution picked (at launch: price, ${ASSET.lead}, ${ASSET.peer}). Evolved daily.`, icon: 'linear' },
   { id: 'forest', name: 'Boosted Forest', role: 'Gradient-boosted decision trees that look for non-linear patterns in the same signals. Evolved daily.', icon: 'forest' },
 ];
 export const EXPERT_IDS = EXPERTS.map((e) => e.id);
@@ -70,25 +70,34 @@ export function expertPredictions(model, X, D, i) {
 /**
  * Direction score of the published direction model on feature row i, per horizon, or null.
  * The model is trained on the sign of the move only (up or down), so a few huge swings can't
- * dominate it the way they dominate a model of the move's size. It is the average of a ridge
- * and a boosted-tree model, each scaled by its spread on its training window, so the score is
- * in "typical signal" units; |score| >= thr marks a confident call (thr = the median |score|
- * on the training window).
- * @returns {Object<number, {d: number, strong: boolean}>|null}
+ * dominate it the way they dominate a model of the move's size. Kinds (engine/train.mjs
+ * fitDirection): 'pair' = the average of a ridge and a boosted-tree regression, 'ridge' = its
+ * ridge half alone, 'logit' = a logistic regression, 'gbc' = a boosted classifier (a horizon's
+ * entry may name its own kind); each is scaled by its spread on its
+ * training window, so the score is in "typical signal" units (~1). A horizon whose entry is
+ * null has no direction model (no reliable signal was found for it): its score is 0, so its
+ * probability stays at 50% and its call is "no clear direction".
+ * @returns {Object<number, {d: number}>|null}
  */
 export function directionScores(model, X, D, i) {
   const dm = model.direction;
   if (!dm) return null;
   const off = i * D;
   for (let j = 0; j < D; j++) if (!Number.isFinite(X[off + j])) return null;
+  const kind = dm.kind || 'pair';
   const out = {};
   for (const h of HORIZONS) {
     const m = dm.h[h];
-    let d = 0.5 * (ridgePredict(m.ridge, X, off) / m.sa + gbdtPredict(m.gbdt, X, off) / m.sb);
+    let d = 0;
+    if (m) {
+      const k = m.kind || kind;
+      if (k === 'ridge') d = ridgePredict(m.ridge, X, off) / m.sa;
+      else if (k === 'logit') d = ridgePredict(m.lin, X, off) / m.sa;
+      else if (k === 'gbc') d = gbdtPredict(m.gbdt, X, off) / m.sb;
+      else d = 0.5 * (ridgePredict(m.ridge, X, off) / m.sa + gbdtPredict(m.gbdt, X, off) / m.sb);
+    }
     if (!Number.isFinite(d)) d = 0;
-    d = Math.max(-5, Math.min(5, d));
-    out[h] = { d, strong: Math.abs(d) >= m.thr };
+    out[h] = { d: Math.max(-5, Math.min(5, d)) };
   }
   return out;
 }
-
