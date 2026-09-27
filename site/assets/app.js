@@ -74,7 +74,7 @@ function parseCSV(text) {
     app.csvClose.set(t, close);
     if (c[col.status] !== 'ok') continue;
     const pred = { t, c: close, origin: c[col.origin], h: {} };
-    for (const h of HORIZONS) pred.h[h] = { price: Number(c[col[`price${h}`]]), p: Number(c[col[`p${h}`]]), direction: c[col[`dir${h}`]], strong: c[col[`strong${h}`]] === '1' };
+    for (const h of HORIZONS) pred.h[h] = { price: Number(c[col[`price${h}`]]), p: Number(c[col[`p${h}`]]), direction: c[col[`dir${h}`]], lo: Number(c[col[`lo${h}`]]) / 1e4, hi: Number(c[col[`hi${h}`]]) / 1e4 };
     app.official.set(t, pred);
   }
 }
@@ -83,7 +83,7 @@ function fromEngine(pred) {
   const o = { t: pred.t, c: pred.c, h: {} };
   for (const h of HORIZONS) {
     const x = pred.h[h];
-    o.h[h] = { price: x.price, p: x.p, direction: x.direction, strong: x.strong };
+    o.h[h] = { price: x.price, p: x.p, direction: x.direction, lo: x.lo[1], hi: x.hi[1] };
   }
   return o;
 }
@@ -127,7 +127,7 @@ async function loadBacktestTail() {
       const c = lines[i].split(',');
       const t = Date.parse(c[0] + ':00Z');
       if (!(t >= since)) { older = true; continue; }
-      app.btPred.set(t, { t, c: Number(c[1]), h: { 60: { price: Number(c[col['1h_price']]), direction: c[col['1h_dir']], actual: c[col['1h_actual_bp']] === '' ? null : Number(c[col['1h_actual_bp']]) / 1e4 } } });
+      app.btPred.set(t, { t, c: Number(c[1]), h: { 60: { price: Number(c[col['1h_price']]), direction: c[col['1h_dir']], lo: Number(c[col['1h_lo80_bp']]) / 1e4, hi: Number(c[col['1h_hi80_bp']]) / 1e4, actual: c[col['1h_actual_bp']] === '' ? null : Number(c[col['1h_actual_bp']]) / 1e4 } } });
     }
     if (older) break; // this file already reaches back far enough
   }
@@ -264,8 +264,6 @@ function renderPrice() {
 
 const pctText = (r, d = 2) => `${r > 0 ? '+' : r < 0 ? '\u2212' : '\u00b1'}${Math.abs(r * 100).toFixed(d)}%`;
 
-const STRONG_TITLE = 'Stronger than half of the last 7 days\' forecasts';
-
 // One forecast box. The price shown is exactly the number the record stores and scores
 // (forecast.js). With SHOW_MOVE off (no price formula beat "no change" in testing) the box leads
 // with the direction call and gives today's price as the price estimate. P(up) within half a
@@ -279,11 +277,10 @@ function forecastBox(pred, h) {
   if (!SHOW_MOVE) {
     const shadow = SHADOW_HORIZONS.includes(h);
     const head = shadow ? 'No reliable signal' : call ? `${up ? '▲ Up' : '▼ Down'}, ${(pr * 100).toFixed(0)}% likely` : 'No clear direction';
-    const note = shadow ? 'No better than a coin flip in testing.<br>' : '';
+    const note = shadow ? 'Too close to a coin flip in testing.<br>' : '';
     return `<div class="fc">
     <h3 class="fc-h">In ${H_NAME[h]}</h3>
     <p class="fc-call ${shadow ? 'flat' : cls}">${head}</p>
-    ${x.strong ? `<p class="fc-dir"><span class="status done" title="${STRONG_TITLE}">strong signal</span></p>` : ''}
     <p class="fc-est">${note}Price estimate <b>${F.price(x.price, PRICE_DIGITS)}</b> · today's price</p>
   </div>`;
   }
@@ -292,7 +289,7 @@ function forecastBox(pred, h) {
   return `<div class="fc">
     <h3 class="fc-h">In ${H_NAME[h]}</h3>
     <p class="fc-head"><span class="fc-price">${F.price(x.price, PRICE_DIGITS)}</span><span class="fc-chg ${cls}">${arrow} ${pctText(r)}</span></p>
-    <p class="fc-dir"><span class="${cls}">${dirText}</span>${x.strong ? ` <span class="status done" title="${STRONG_TITLE}">strong signal</span>` : ''}</p>
+    <p class="fc-dir"><span class="${cls}">${dirText}</span></p>
   </div>`;
 }
 
@@ -328,37 +325,34 @@ function renderChart() {
   for (const [t, k] of app.ada) if (t >= t0 && (Math.round(t / MINUTE) % 5 === 0)) series.push({ t: t + MINUTE, c: k.c });
   if (series.length < 10) for (const [t, c] of app.csvClose) if (t >= t0) series.push({ t: t + MINUTE, c });
   series.sort((a, b) => a.t - b.t);
-  // prediction line, past: every 1-hour prediction at the moment it came due
-  const pred = [];
+  // the 80% range, past: every 1-hour forecast's range at the moment it came due; before the
+  // live record began, the backtest's forecasts fill it in
   const all = new Map([...app.official, ...app.live]);
-  for (const [t, p] of all) {
-    const at = issuedAt(t) + 60 * MINUTE;
-    if (at >= t0 && at <= tNow && Number.isFinite(p.h[60].price)) pred.push({ t: at, c: p.h[60].price });
-  }
-  pred.sort((a, b) => a.t - b.t);
   const firstLive = Math.min(...[...all.keys()]);
-  const past = [];
-  for (const [t, p] of app.btPred) {
-    const at = issuedAt(t) + 60 * MINUTE;
-    if (t < firstLive && at >= t0 && Number.isFinite(p.h[60].price)) past.push({ t: at, c: p.h[60].price });
-  }
-  past.sort((a, b) => a.t - b.t);
-  // the hourly 1-hour calls (issued on the hour), where they came due; filled = came true
+  const band = [];
+  const addBand = (t, p) => {
+    const x = p.h[60], at = issuedAt(t) + 60 * MINUTE;
+    if (at >= t0 && at <= tNow && Number.isFinite(x.lo) && Number.isFinite(x.hi)) band.push({ t: at, lo: p.c * Math.exp(x.lo), hi: p.c * Math.exp(x.hi) });
+  };
+  for (const [t, p] of all) addBand(t, p);
+  for (const [t, p] of app.btPred) if (t < firstLive) addBand(t, p);
+  band.sort((a, b) => a.t - b.t);
+  // the hourly 1-hour calls (issued on the hour), where they were made; filled = came true
   const calls = [];
   const addCall = (t, p, y) => {
     const x = p.h[60];
     const due = issuedAt(t) + 60 * MINUTE;
-    if ((Math.round(t / MINUTE) + 1) % 60 || due < t0 || due > tNow || !Number.isFinite(x.price)) return;
+    if ((Math.round(t / MINUTE) + 1) % 60 || issuedAt(t) < t0 || due > tNow) return;
     if ((x.direction !== 'up' && x.direction !== 'down') || !Number.isFinite(y) || y === 0) return;
-    calls.push({ t: due, c: x.price, up: x.direction === 'up', right: (y > 0) === (x.direction === 'up') });
+    calls.push({ t: issuedAt(t), c: p.c, up: x.direction === 'up', right: (y > 0) === (x.direction === 'up') });
   };
   for (const [t, p] of all) { const c1 = closeAt(t + 60 * MINUTE); if (c1 !== undefined) addCall(t, p, Math.log(c1 / p.c)); }
   for (const [t, p] of app.btPred) if (t < firstLive) addCall(t, p, p.h[60].actual);
   const last = latestPred();
-  // ahead: from the price now through the latest 1 h, 3 h and 24 h predictions, labelled with the call
+  // ahead: the latest 1-hour and 3-hour ranges, labelled with the call
   const tag = (x, h) => (SHADOW_HORIZONS.includes(h) ? '' : x.direction === 'up' ? ` ▲${Math.round(x.p * 100)}%` : x.direction === 'down' ? ` ▼${Math.round((1 - x.p) * 100)}%` : '');
-  const marks = last ? HORIZONS.map((h) => ({ h, t: issuedAt(last.t) + h * MINUTE, c: last.h[h].price, label: `${H_SHORT[h]}${tag(last.h[h], h)}` })).filter((m) => Number.isFinite(m.c)) : [];
-  drawChart($('chartSvg'), { now: tNow, price: app.price ?? series.at(-1)?.c, series, pred, past, calls, marks });
+  const marks = last ? [60, 180].map((h) => ({ h, t: issuedAt(last.t) + h * MINUTE, lo: last.c * Math.exp(last.h[h].lo), hi: last.c * Math.exp(last.h[h].hi), label: `${H_SHORT[h]}${tag(last.h[h], h)}` })).filter((m) => Number.isFinite(m.lo) && Number.isFinite(m.hi)) : [];
+  drawChart($('chartSvg'), { now: tNow, price: app.price ?? series.at(-1)?.c, series, band, calls, marks });
 }
 
 // the published live record only (forecasts made on time; backfilled ones are counted apart)
@@ -366,22 +360,30 @@ const totals = (h) => (app.status?.schema?.metrics === 4 ? app.status.totals.all
 
 const pct = (x, d = 1) => (x === null || x === undefined ? '—' : `${(x * 100).toFixed(d)}%`);
 
-// Per horizon: direction right on strong-signal calls (non-overlapping), how many forecasts
-// those are, all calls, and the shown price's typical miss against "no change".
+// Per horizon: how often the direction was right (non-overlapping calls), with a rough 95%
+// range (Wilson; it ignores that neighbouring hours share market conditions, so if anything it
+// is too narrow). Below ENOUGH_CALLS the page says it is too early to tell.
+const ENOUGH_CALLS = 200;
+function wilson(k, n, z = 1.96) {
+  const p = k / n, d = 1 + z * z / n, m = (p + z * z / (2 * n)) / d, e = (z / d) * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n));
+  return [m - e, m + e];
+}
+
 function scoreCell(a, empty) {
   const s = a && summarize(a);
   if (!s || !s.ni) {
     if (s && s.callShare === 0) return `<td class="big">no call<small>no reliable signal</small></td>`;
     return `<td class="big">—<small>${empty}</small></td>`;
   }
-  const miss = !SHOW_MOVE || s.maeSkill === null ? '' : ` · price miss ${s.maeSkill >= 0 ? `${(s.maeSkill * 100).toFixed(2)}% smaller` : `${(-s.maeSkill * 100).toFixed(2)}% larger`} than “no change”`;
-  return `<td class="big">${pct(s.strongAccI)}<small>strong-signal calls (${F.num(s.sni)}, ${pct(s.strongShare, 0)} of forecasts) · all calls ${pct(s.accI)} (${F.num(s.ni)})${miss}</small></td>`;
+  const [lo, hi] = wilson(a.hi, a.ni);
+  const early = s.ni < ENOUGH_CALLS ? ' · too few calls to tell yet' : '';
+  return `<td class="big">${pct(s.accI)}<small>${F.num(s.ni)} calls · probably between ${pct(lo, 0)} and ${pct(hi, 0)}${early}</small></td>`;
 }
 
 function renderScores() {
   const b = app.backtest, keys = b?.schema?.metrics === 4 ? Object.keys(b.days || {}) : [];
   $('scores').querySelector('tbody').innerHTML = HORIZONS.map((h) => {
-    if (SHADOW_HORIZONS.includes(h)) return `<tr><td class="h">${H_SHORT[h]}</td><td class="big" colspan="2">no call<small>Never beat a coin flip in testing, so no call. It still runs in the background.</small></td></tr>`;
+    if (SHADOW_HORIZONS.includes(h)) return `<tr><td class="h">${H_SHORT[h]}</td><td class="big" colspan="2">no call<small>Too close to a coin flip in testing, so no call. It still runs in the background.</small></td></tr>`;
     const bt = keys.reduce((a, d) => mergeAgg(a, b.days[d][h]), null);
     return `<tr><td class="h">${H_SHORT[h]}</td>${scoreCell(totals(h), 'first results after ' + H_NAME[h])}${scoreCell(bt, 'no test yet')}</tr>`;
   }).join('');

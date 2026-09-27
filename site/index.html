@@ -55,15 +55,15 @@
 
 <section class="block alt" id="chart"><div class="wrap">
   <div class="sec-head">
-    <div><p class="eyebrow">Chart</p><h2>Prediction <em>vs.</em> reality</h2></div>
-    <p>Orange is the prediction, the dark line is the real price. The triangles are the 1-hour calls, filled when they were right.</p>
+    <div><p class="eyebrow">Chart</p><h2>Guess <em>vs.</em> reality</h2></div>
+    <p>The line is the real price. The band shows where the model expected the price to be an hour later. The triangles are its hourly up or down calls, filled when they were right.</p>
   </div>
   <figure class="figure">
     <svg id="chartSvg" class="chart" role="img" aria-label="ADA price over the last 24 hours and the model's prediction"></svg>
     <figcaption class="legend">
       <span><i class="k k-price"></i>Price</span>
-      <span><i class="k k-pred"></i>Prediction</span>
-      <span><i class="k k-call"><b class="right">▲</b> <b class="wrong">▽</b></i>1-hour call: filled when it came true</span>
+      <span><i class="k k-band"></i>Expected range (80%)</span>
+      <span><i class="k k-call"><b class="right">▲</b> <b class="wrong">▽</b></i>1-hour call, filled when it was right</span>
     </figcaption>
   </figure>
 </div></section>
@@ -71,7 +71,7 @@
 <section class="block" id="record"><div class="wrap">
   <div class="sec-head">
     <div><p class="eyebrow">Record · <span id="liveSince">live</span></p><h2>How often it was right</h2></div>
-    <p>50% is what a coin flip would get. The past-year test runs the same model over the last 12 months, using only data it could have had at the time. Its settings were tuned on the Bitcoin version. More in the <a href="https://github.com/omidabduli/cardano-self-improving-prediction/blob/main/docs/EXPERIMENTS.md">experiment report</a>.</p>
+    <p>50% is what a coin flip would get. Even at 53%, trading fees would likely eat the difference. The past-year test runs the same model over the last 12 months, using only data it could have had at the time. Its settings were tuned on the Bitcoin version. More in the <a href="https://github.com/omidabduli/cardano-self-improving-prediction/blob/main/docs/EXPERIMENTS.md">experiment report</a>.</p>
   </div>
   <div class="table-wrap">
     <table class="scores" id="scores">
@@ -99,7 +99,7 @@
   <ol class="steps">
     <li><span class="yr">01</span><h3>Reads the market</h3><p>A week of minute prices for Cardano, Bitcoin and Ethereum, plus the Fear &amp; Greed index.</p></li>
     <li><span class="yr">02</span><h3>Guesses up or down</h3><p>It only learns the direction, not how far the price moves.</p></li>
-    <li><span class="yr">03</span><h3>Says how sure it is</h3><p>55% should be right about 55% of the time. It can't predict the size of a move, so the price estimate is just today's price. At 24 hours it was no better than a coin flip, so it makes no call there.</p></li>
+    <li><span class="yr">03</span><h3>Says how sure it is</h3><p>55% should be right about 55% of the time. It can't predict the size of a move, so the price estimate is just today's price. At 3 and 24 hours it was hardly better than a coin flip, so it makes no call there.</p></li>
     <li><span class="yr">04</span><h3>Gets checked</h3><p>Every forecast is compared with the real price later. Forecasts made late after an outage don't count.</p></li>
     <li><span class="yr">05</span><h3>Retrains every night</h3><p>New settings are only kept if they do better on days the model hasn't seen.</p></li>
   </ol>

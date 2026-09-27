@@ -86,8 +86,10 @@ export const ONLINE = {
 
 // Horizons shown as "no reliable signal": their direction model runs only in the background
 // (its P(up) is scored by the gate counters, so it can be re-tested), and the page shows 50%.
-// At 24 hours the direction model lost to a coin flip in every period tested.
-export const SHADOW_HORIZONS = [1440];
+// At 24 hours the direction model lost to a coin flip in every period tested; for Cardano the
+// 3-hour one was hardly better (51.9% over the past year, 50.2% on the last 90 days' 3-hourly
+// calls), so it makes no call there either.
+export const SHADOW_HORIZONS = [180, 1440];
 
 // Show a price move at all? No price formula beat "no change" in the untouched year
 // (docs/EXPERIMENTS.md, rule 7), so the shown price is today's price and the forecast is its
