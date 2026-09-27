@@ -16,7 +16,8 @@ import { drawChart } from './chart.js';
 import * as F from './format.js';
 
 const KEEP_MIN = WARMUP + 1500; // candles kept in memory: warm-up + a day for the chart
-const LOG_ROWS = 8;
+const LOG_ROWS = 8; // rows visible at once; the rest of the last LOG_DAYS scroll
+const LOG_DAYS = 2;
 const H_NAME = { 60: '1 hour', 180: '3 hours', 1440: '24 hours' };
 const H_SHORT = { 60: '1 h', 180: '3 h', 1440: '24 h' };
 
@@ -405,9 +406,10 @@ function renderLog() {
     }
   }
   rows.sort((a, b) => b.due - a.due || a.h - b.h);
+  const since = tNow - LOG_DAYS * 1440 * MINUTE;
   const today = new Date().toDateString();
   const when = (ms) => (new Date(ms).toDateString() === today ? F.hhmm(ms) : `${F.dateShort(ms)} ${F.hhmm(ms)}`);
-  $('log').querySelector('tbody').innerHTML = rows.slice(0, LOG_ROWS).map(({ t, h, p, c1 }) => {
+  $('log').querySelector('tbody').innerHTML = rows.filter((r, i) => i < LOG_ROWS || r.due >= since).map(({ t, h, p, c1 }) => {
     const x = p.h[h];
     const y = Math.log(c1 / p.c);
     const call = x.direction === 'up' || x.direction === 'down';
@@ -421,6 +423,9 @@ function renderLog() {
       <td>${verdict}</td>
     </tr>`;
   }).join('') || `<tr><td colspan="5">The first predictions are checked one hour after launch.</td></tr>`;
+  // the box stays LOG_ROWS rows tall; older rows scroll
+  const wrap = $('logWrap'), trs = wrap.querySelectorAll('tbody tr');
+  wrap.style.maxHeight = trs.length > LOG_ROWS ? `${trs[LOG_ROWS].offsetTop}px` : '';
 }
 
 function renderStatic() {

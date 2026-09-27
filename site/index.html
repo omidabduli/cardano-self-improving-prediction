@@ -56,14 +56,13 @@
 <section class="block alt" id="chart"><div class="wrap">
   <div class="sec-head">
     <div><p class="eyebrow">Chart</p><h2>Prediction <em>vs.</em> reality</h2></div>
-    <p>The orange line is the predicted price and the other line is what the price did. On the left, the orange line is what the forecast made one hour earlier said (dashed where it comes from the backtest, before the live record began); on the right, it runs through the latest forecasts. The best price estimate turned out to be today's price, so what the model adds is the direction: the triangles are the hourly 1-hour calls, filled when they came true.</p>
+    <p>The orange line is the predicted price and the other line is what the price did. On the left, the orange line is what the forecast made one hour earlier said; on the right, it runs through the latest forecasts. The best price estimate turned out to be today's price, so what the model adds is the direction: the triangles are the hourly 1-hour calls, filled when they came true.</p>
   </div>
   <figure class="figure">
     <svg id="chartSvg" class="chart" role="img" aria-label="ADA price over the last 24 hours and the model's prediction"></svg>
     <figcaption class="legend">
       <span><i class="k k-price"></i>Price</span>
       <span><i class="k k-pred"></i>Prediction</span>
-      <span><i class="k k-bt"></i>Prediction in the backtest, before the live record began</span>
       <span><i class="k k-call"><b class="right">▲</b> <b class="wrong">▽</b></i>1-hour call: filled when it came true</span>
     </figcaption>
   </figure>
@@ -83,7 +82,7 @@
   <p class="note" id="recordNote"></p>
 
   <h3 class="sub-h">Latest checked predictions</h3>
-  <div class="table-wrap">
+  <div class="table-wrap log-wrap" id="logWrap">
     <table class="log" id="log">
       <thead><tr><th>Made</th><th>For</th><th>Predicted</th><th>Actual</th><th>Direction</th></tr></thead>
       <tbody></tbody>

@@ -57,12 +57,12 @@ export function drawChart(svg, d) {
   el('line', { class: 'now-line', x1: x(d.now), x2: x(d.now), y1: padT, y2: Hh - padB }, svg);
   el('text', { class: 'lbl', x: x(d.now), y: padT - 6, 'text-anchor': 'middle' }, svg).textContent = 'now';
 
-  // prediction: one line, past and future; the backtest part (before the live record) dashed,
-  // joined to the first live point so it reads as one line
+  // prediction: one line, past and future; where the live record doesn't reach back far enough,
+  // the backtest's forecasts fill in the start of it
   const pred = d.pred.filter((p) => p.t >= t0 && p.t <= t1);
   const bt = past.filter((p) => p.t >= t0 && (!pred.length || p.t < pred[0].t));
-  if (bt.length) el('polyline', { class: 'pred pred-bt', points: pts(pred.length ? bt.concat(pred[0]) : bt) }, svg);
-  if (pred.length > 1) el('polyline', { class: 'pred', points: pts(pred) }, svg);
+  const line = bt.concat(pred);
+  if (line.length > 1) el('polyline', { class: 'pred', points: pts(line) }, svg);
 
   // price as it happened
   const series = d.series.filter((p) => p.t >= t0).concat({ t: d.now, c: d.price });
