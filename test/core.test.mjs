@@ -527,3 +527,32 @@ test('the signal gate hides a model that loses to a coin, and keeps one that win
   assert.equal(good.eng.s.gate[60].on, true);
   assert.ok(!good.last.gated && good.last.p !== 0.5);
 });
+
+test('a release switches the record from data/launch: old one archived unchanged, safe to repeat', async () => {
+  const fs = await import('node:fs'), os = await import('node:os'), path = await import('node:path');
+  const { switchToLaunch } = await import('../engine/run.mjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'launch-test-'));
+  const w = (rel, text) => { const p = path.join(root, rel); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, text); };
+  const r = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
+  w('predictions/2026-09-26.csv', 'v3 rows'); w('daily/2026-09.json', 'v3 daily'); w('model.json', 'v3 model'); w('status.json', 'v3 status');
+  w('archive/v2-ranges/README.md', 'older archive');
+  w('archive/v3-direction/README.md', 'what v3 was');
+  w('launch/ARCHIVE_AS', 'v3-direction\n'); w('launch/model.json', 'v4 model'); w('launch/state.json', 'v4 state'); w('launch/daily/2026-09.json', 'v4 daily'); w('launch/backtest/2025-09.csv', 'v4 backtest');
+  // a crash half-way: the model was archived, nothing else yet
+  fs.renameSync(path.join(root, 'model.json'), path.join(root, 'archive/v3-direction/model.json'));
+  assert.equal(switchToLaunch(root), 'v3-direction');
+  assert.equal(r('archive/v3-direction/model.json'), 'v3 model');
+  assert.equal(r('archive/v3-direction/predictions/2026-09-26.csv'), 'v3 rows');
+  assert.equal(r('archive/v3-direction/daily/2026-09.json'), 'v3 daily');
+  assert.equal(r('archive/v3-direction/status.json'), 'v3 status');
+  assert.equal(r('archive/v3-direction/README.md'), 'what v3 was');
+  assert.equal(r('archive/v2-ranges/README.md'), 'older archive');
+  assert.equal(r('model.json'), 'v4 model');
+  assert.equal(r('state.json'), 'v4 state');
+  assert.equal(r('daily/2026-09.json'), 'v4 daily');
+  assert.equal(r('backtest/2025-09.csv'), 'v4 backtest');
+  assert.ok(!fs.existsSync(path.join(root, 'launch')) && !fs.existsSync(path.join(root, 'predictions')));
+  assert.equal(switchToLaunch(root), null, 'nothing to do once switched');
+  assert.equal(r('model.json'), 'v4 model');
+  fs.rmSync(root, { recursive: true, force: true });
+});
