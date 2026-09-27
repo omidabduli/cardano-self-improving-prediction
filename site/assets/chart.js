@@ -1,9 +1,10 @@
 // One SVG chart: the price as it happened, and a shaded band for the 80% range of the 1-hour
 // forecast. On the left, the band at each moment is where the forecast made an hour earlier
 // expected the price to be (before the live record began, the backtest's forecasts fill it in).
-// Small triangles on the price line are the hourly 1-hour calls (up or down), drawn where they
-// were made and filled when they came true. On the right, the band opens from the price now to
-// the latest 1-hour and 3-hour ranges. Colours come from the CSS tokens, so light and dark
+// Arrows on the price line are the hourly 1-hour calls, drawn where they were made: ▲ said up,
+// ▼ said down; green when it came true, red when it didn't. On the right, the band opens from
+// the price now to the latest 1-hour and 3-hour ranges, and orange arrows show the open 1-hour,
+// 3-hour and 24-hour calls. Colours come from the CSS tokens, so light and dark
 // themes need no code.
 
 import { hhmm } from './format.js';
@@ -22,7 +23,8 @@ function el(tag, attrs, parent) {
  * @param {SVGSVGElement} svg
  * @param {{now:number, price:number, series:{t:number,c:number}[], band:{t:number,lo:number,hi:number}[],
  *          calls?:{t:number,c:number,up:boolean,right:boolean}[],
- *          marks:{h:number,t:number,lo:number,hi:number,label?:string}[]}} d  prices in USD, times in ms
+ *          marks:{h:number,t:number,lo:number,hi:number,up?:boolean,label?:string}[]}} d
+ *          (a mark without up is no call; the 24-hour one has no range drawn, so it can't squash the price)  prices in USD, times in ms
  */
 export function drawChart(svg, d) {
   const W = svg.clientWidth || 800, Hh = svg.clientHeight || 360;
@@ -37,7 +39,7 @@ export function drawChart(svg, d) {
   const band = d.band.filter((b) => b.t >= t0 && b.t <= d.now);
   let lo = Infinity, hi = -Infinity;
   for (const p of d.series) { if (p.t < t0) continue; if (p.c < lo) lo = p.c; if (p.c > hi) hi = p.c; }
-  for (const b of [...band, ...d.marks]) { if (b.lo < lo) lo = b.lo; if (b.hi > hi) hi = b.hi; }
+  for (const b of [...band, ...d.marks.filter((m) => m.h < 1440)]) { if (b.lo < lo) lo = b.lo; if (b.hi > hi) hi = b.hi; }
   const pad = (hi - lo) * 0.08 || d.price * 0.002;
   lo -= pad; hi += pad;
   const x = (t) => padL + ((t - t0) / (t1 - t0)) * (W - padL - padR);
@@ -62,25 +64,28 @@ export function drawChart(svg, d) {
   // the 80% range: past (what the forecast an hour earlier expected) and ahead (from now)
   if (band.length > 1) el('polygon', { class: 'band', points: area(band) }, svg);
   const open = [...d.marks].sort((a, b) => a.t - b.t).filter((m) => m.t > d.now);
-  if (open.length) el('polygon', { class: 'band band-ahead', points: area([{ t: d.now, lo: d.price, hi: d.price }, ...open]) }, svg);
+  const cone = open.filter((m) => m.h < 1440);
+  if (cone.length) el('polygon', { class: 'band band-ahead', points: area([{ t: d.now, lo: d.price, hi: d.price }, ...cone]) }, svg);
 
   // price as it happened
   const series = d.series.filter((p) => p.t >= t0).concat({ t: d.now, c: d.price });
   el('polyline', { class: 'price', points: pts(series) }, svg);
 
-  // the hourly 1-hour calls, where they were made: ▲ up, ▼ down; filled = came true
-  for (const k of d.calls || []) {
-    if (k.t < t0 || k.t > d.now) continue;
-    const cx = x(k.t), cy = y(k.c), s = narrow ? 3.5 : 4.5;
-    const tri = k.up ? `${cx},${cy - s} ${cx - s},${cy + s * 0.8} ${cx + s},${cy + s * 0.8}` : `${cx},${cy + s} ${cx - s},${cy - s * 0.8} ${cx + s},${cy - s * 0.8}`;
-    el('polygon', { class: `call ${k.right ? 'right' : 'wrong'}`, points: tri }, svg);
-  }
+  // the hourly 1-hour calls, where they were made: ▲ up, ▼ down; green = came true, red = didn't
+  const s = narrow ? 4.5 : 5.5;
+  const arrow = (cx, cy, up, cls) => el('polygon', { class: `call ${cls}`, points: up
+    ? `${cx},${cy - s} ${cx - s},${cy + s * 0.8} ${cx + s},${cy + s * 0.8}`
+    : `${cx},${cy + s} ${cx - s},${cy - s * 0.8} ${cx + s},${cy - s * 0.8}` }, svg);
+  for (const k of d.calls || []) if (k.t >= t0 && k.t <= d.now) arrow(x(k.t), y(k.c), k.up, k.right ? 'right' : 'wrong');
   el('circle', { class: 'now-dot', cx: x(d.now), cy: y(d.price), r: 3.5 }, svg);
 
-  // labels for the open forecasts; 1 h and 3 h sit close together: one below its range, one above
+  // the open calls: an orange arrow at 1 h, 3 h and 24 h, with a label; 1 h and 3 h sit close
+  // together, so one label goes below its range and the other above
   for (const m of open) {
-    const below = m.h === 60;
-    el('text', { class: 'lbl', x: x(m.t), y: below ? y(m.lo) + 16 : y(m.hi) - 8, 'text-anchor': m.t >= t1 - H_MS ? 'end' : 'middle' }, svg).textContent = m.label || `${m.h / 60} h`;
+    const mx = x(m.t), my = m.h < 1440 ? y((m.lo + m.hi) / 2) : y(d.price);
+    if (m.up !== undefined) arrow(mx, my, m.up, 'open');
+    const ly = m.h === 60 ? y(m.lo) + 16 : m.h === 180 ? y(m.hi) - 8 : my - 10;
+    el('text', { class: 'lbl', x: mx, y: ly, 'text-anchor': m.t >= t1 - H_MS ? 'end' : 'middle' }, svg).textContent = m.label || `${m.h / 60} h`;
   }
 }
 

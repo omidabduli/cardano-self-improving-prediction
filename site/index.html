@@ -4,9 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>ADAptive · a small Cardano forecast experiment</title>
-  <meta name="description" content="A learning project: a small model guesses whether Cardano will be higher in 1 and 3 hours, and every guess is checked in public.">
+  <meta name="description" content="A learning project: a small model guesses whether Cardano will be higher in 1, 3 and 24 hours, and every guess is checked in public.">
   <meta property="og:title" content="ADAptive · a small Cardano forecast experiment">
-  <meta property="og:description" content="A learning project: a small model guesses whether Cardano will be higher in 1 and 3 hours, and every guess is checked in public.">
+  <meta property="og:description" content="A learning project: a small model guesses whether Cardano will be higher in 1, 3 and 24 hours, and every guess is checked in public.">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="ADAptive">
   <meta property="og:url" content="https://omidabduli.github.io/cardano-self-improving-prediction/">
@@ -38,7 +38,7 @@
 <header class="hero" id="top"><div class="wrap">
   <p class="eyebrow">ADA / USDT · live from Binance · <span id="liveState" class="live">connecting</span></p>
   <h1>A small experiment in <em>guessing</em> where Cardano goes next.</h1>
-  <p class="lede">I built this to learn how forecasting works. Every 15 minutes it guesses whether the price will be higher in 1 and 3 hours, and every guess is checked later. Please don't trade on it.</p>
+  <p class="lede">I built this to learn how forecasting works. Every 15 minutes it guesses whether the price will be higher in 1, 3 and 24 hours, and every guess is checked later. Please don't trade on it.</p>
 
   <div class="now">
     <span class="now-price" id="price">—</span>
@@ -55,14 +55,18 @@
 <section class="block alt" id="chart"><div class="wrap">
   <div class="sec-head">
     <div><p class="eyebrow">Chart</p><h2>Guess <em>vs.</em> reality</h2></div>
-    <p>The line is the real price. The band shows where the model expected the price to be an hour later. The triangles are its hourly up or down calls, filled when they were right.</p>
+    <p>The line is the real price. The band shows where the model expected the price to be an hour later. The arrows are its hourly 1-hour calls: green when right, red when wrong.</p>
   </div>
   <figure class="figure">
     <svg id="chartSvg" class="chart" role="img" aria-label="ADA price over the last 24 hours and the model's prediction"></svg>
     <figcaption class="legend">
       <span><i class="k k-price"></i>Price</span>
       <span><i class="k k-band"></i>Expected range (80%)</span>
-      <span><i class="k k-call"><b class="right">▲</b> <b class="wrong">▽</b></i>1-hour call, filled when it was right</span>
+      <span><i class="k k-call"><b class="right">▲</b></i>said up, was right</span>
+      <span><i class="k k-call"><b class="wrong">▲</b></i>said up, was wrong</span>
+      <span><i class="k k-call"><b class="right">▼</b></i>said down, was right</span>
+      <span><i class="k k-call"><b class="wrong">▼</b></i>said down, was wrong</span>
+      <span><i class="k k-call"><b class="open">△</b></i>open call, not checked yet</span>
     </figcaption>
   </figure>
 </div></section>
@@ -98,7 +102,7 @@
   <ol class="steps">
     <li><span class="yr">01</span><h3>Reads the market</h3><p>A week of minute prices for Cardano, Bitcoin and Ethereum, plus the Fear &amp; Greed index.</p></li>
     <li><span class="yr">02</span><h3>Guesses up or down</h3><p>It only learns the direction, not how far the price moves.</p></li>
-    <li><span class="yr">03</span><h3>Says how sure it is</h3><p>55% should be right about 55% of the time. It can't predict the size of a move, so the price estimate is just today's price. At 3 and 24 hours it was hardly better than a coin flip, so it makes no call there.</p></li>
+    <li><span class="yr">03</span><h3>Says how sure it is</h3><p>55% should be right about 55% of the time. It can't predict the size of a move, so the price estimate is just today's price. At 3 and 24 hours it was hardly better than a coin flip in testing, so take those lightly.</p></li>
     <li><span class="yr">04</span><h3>Gets checked</h3><p>Every forecast is compared with the real price later. Forecasts made late after an outage don't count.</p></li>
     <li><span class="yr">05</span><h3>Retrains every night</h3><p>New settings are only kept if they do better on days the model hasn't seen.</p></li>
   </ol>

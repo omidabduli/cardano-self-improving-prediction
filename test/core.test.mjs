@@ -405,14 +405,14 @@ test('the shown price is exactly what is stored and scored', () => {
 });
 
 test('a "no reliable signal" horizon shows 50% while its model is measured in the background', () => {
-  const eng = flatEngine();
+  const eng = new Engine(toyModel(), freshState(['rw', 'good', 'bad'], 0), { shadow: [1440] });
   let t = Date.UTC(2026, 0, 5, 0, 14), price = 100;
   let last = null;
   for (let k = 0; k < 200; k++, t += CADENCE * MINUTE) {
     price *= 1.0005; // always up, and the model always says up
     last = eng.step(t, price, 0.001, zeroMus(), Object.fromEntries(HORIZONS.map((h) => [h, { d: 2 }]))).pred;
   }
-  for (const h of SHADOW_HORIZONS) {
+  for (const h of [1440]) {
     assert.ok(last.h[h].shadow && last.h[h].p === 0.5 && last.h[h].direction === 'neutral' && !last.h[h].strong);
     assert.ok(last.h[h].pModel > 0.5);
     assert.ok(eng.s.gate[h].n > 0 && eng.s.gate[h].g > 0, 'background score of the model');

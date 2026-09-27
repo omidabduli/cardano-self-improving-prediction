@@ -346,9 +346,9 @@ function renderChart() {
   for (const [t, p] of all) { const c1 = closeAt(t + 60 * MINUTE); if (c1 !== undefined) addCall(t, p, Math.log(c1 / p.c)); }
   for (const [t, p] of app.btPred) if (t < firstLive) addCall(t, p, p.h[60].actual);
   const last = latestPred();
-  // ahead: the latest 1-hour and 3-hour ranges, labelled with the call
+  // ahead: the latest 1-hour, 3-hour and 24-hour calls, with their ranges
   const tag = (x, h) => (SHADOW_HORIZONS.includes(h) ? '' : x.direction === 'up' ? ` ▲${Math.round(x.p * 100)}%` : x.direction === 'down' ? ` ▼${Math.round((1 - x.p) * 100)}%` : '');
-  const marks = last ? [60, 180].map((h) => ({ h, t: issuedAt(last.t) + h * MINUTE, lo: last.c * Math.exp(last.h[h].lo), hi: last.c * Math.exp(last.h[h].hi), label: `${H_SHORT[h]}${tag(last.h[h], h)}` })).filter((m) => Number.isFinite(m.lo) && Number.isFinite(m.hi)) : [];
+  const marks = last ? HORIZONS.map((h) => ({ h, t: issuedAt(last.t) + h * MINUTE, lo: last.c * Math.exp(last.h[h].lo), hi: last.c * Math.exp(last.h[h].hi), up: SHADOW_HORIZONS.includes(h) || !['up', 'down'].includes(last.h[h].direction) ? undefined : last.h[h].direction === 'up', label: `${H_SHORT[h]}${tag(last.h[h], h)}` })).filter((m) => Number.isFinite(m.lo) && Number.isFinite(m.hi)) : [];
   drawChart($('chartSvg'), { now: tNow, price: app.price ?? series.at(-1)?.c, series, band, calls, marks });
 }
 

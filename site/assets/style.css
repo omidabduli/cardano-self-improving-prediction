@@ -139,15 +139,16 @@ section.alt{background:var(--surface)}
 .chart .now-dot{fill:var(--ink)}
 .chart .now-line{stroke:var(--muted);stroke-width:1;stroke-dasharray:2 4}
 .chart .lbl{fill:var(--ink-2)}
-.chart .call{stroke-width:1.3}
-.chart .call.right{fill:var(--up);stroke:var(--up)}
-.chart .call.wrong{fill:var(--raised);stroke:var(--down)}
+.chart .call{stroke:var(--raised);stroke-width:.8}
+.chart .call.right{fill:var(--up)}
+.chart .call.wrong{fill:var(--down)}
+.chart .call.open{fill:none;stroke:var(--clay);stroke-width:1.6}
 .legend{display:flex;flex-wrap:wrap;gap:8px 24px;margin-top:12px;padding-inline:8px;font-size:13px;color:var(--muted)}
 .k{display:inline-block;width:18px;height:10px;margin-right:8px;vertical-align:0;border-radius:2px}
 .k-price{height:2px;background:var(--ink);vertical-align:3px}
 .k-band{background:color-mix(in srgb,var(--clay) 22%,transparent)}
 .k-call{width:auto;height:auto;font-size:12px;line-height:1;vertical-align:0;border-radius:0}
-.k-call .right{color:var(--up)} .k-call .wrong{color:var(--down)}
+.k-call .right{color:var(--up)} .k-call .wrong{color:var(--down)} .k-call .open{color:var(--clay)}
 .k-now{background:color-mix(in srgb,var(--clay) 30%,transparent);border-left:2px solid var(--clay)}
 
 /* Tables: hairline rows, mono numbers, no zebra, no vertical borders */

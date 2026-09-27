@@ -2,7 +2,7 @@
 
 **Live: https://omidabduli.github.io/cardano-self-improving-prediction/**
 
-A small learning project. Every 15 minutes it guesses whether the Cardano (ADA) price will be higher in 1 hour. Later it checks each guess against the real price and keeps the score in public.
+A small learning project. Every 15 minutes it guesses whether the Cardano (ADA) price will be higher in 1, 3 and 24 hours. Later it checks each guess against the real price and keeps the score in public.
 
 It has a twin for Bitcoin, [Bitcast](https://github.com/omidabduli/bitcoin-self-improving-prediction). The code is the same and only the coin is different.
 
@@ -12,7 +12,7 @@ I love prediction, and I wanted to learn how it really works. Nassim Taleb and R
 
 ## What I found
 
-Mostly that it is hard. On a year of data I never used for tuning (September 2024 to September 2025), the model called the 1-hour direction right 53.1% of the time. That is a little better than a coin flip. The 3-hour calls were close to a coin flip in recent months, and the 24-hour ones were worse than a coin flip, so it makes no call at 3 or 24 hours. No formula for the size of the move beat simply using today's price.
+Mostly that it is hard. On a year of data I never used for tuning (September 2024 to September 2025), the model called the 1-hour direction right 53.1% of the time. That is a little better than a coin flip. The 3-hour calls were close to a coin flip in recent months, and the 24-hour ones were worse than one. I still show both, and the live record will say if they're worth anything. No formula for the size of the move beat simply using today's price.
 
 So please don't trade on it. At these numbers, fees would eat the difference.
 
