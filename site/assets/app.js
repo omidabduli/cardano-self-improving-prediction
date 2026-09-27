@@ -10,7 +10,7 @@ import { buildSeries, indexOf } from '../core/candles.js';
 import { computeFeatures, D, WARMUP, FEATURE_SCHEMA } from '../core/features.js';
 import { expertPredictions, directionScores } from '../core/models.js';
 import { Engine, ORIGIN, STATE_VERSION } from '../core/engine.js';
-import { mergeAgg, summarize } from '../core/metrics.js';
+import { summarize } from '../core/metrics.js';
 import { fetchKlines, fetchFearGreed, fetchPrice, LiveStream, serverClockOffset } from './feed.js';
 import { drawChart } from './chart.js';
 import * as F from './format.js';
@@ -381,11 +381,9 @@ function scoreCell(a, empty) {
 }
 
 function renderScores() {
-  const b = app.backtest, keys = b?.schema?.metrics === 4 ? Object.keys(b.days || {}) : [];
   $('scores').querySelector('tbody').innerHTML = HORIZONS.map((h) => {
-    if (SHADOW_HORIZONS.includes(h)) return `<tr><td class="h">${H_SHORT[h]}</td><td class="big" colspan="2">no call<small>Too close to a coin flip in testing, so no call. It still runs in the background.</small></td></tr>`;
-    const bt = keys.reduce((a, d) => mergeAgg(a, b.days[d][h]), null);
-    return `<tr><td class="h">${H_SHORT[h]}</td>${scoreCell(totals(h), 'first results after ' + H_NAME[h])}${scoreCell(bt, 'no test yet')}</tr>`;
+    if (SHADOW_HORIZONS.includes(h)) return `<tr><td class="h">${H_SHORT[h]}</td><td class="big">no call<small>Too close to a coin flip in testing, so no call. It still runs in the background.</small></td></tr>`;
+    return `<tr><td class="h">${H_SHORT[h]}</td>${scoreCell(totals(h), 'first results after ' + H_NAME[h])}</tr>`;
   }).join('');
   const s = app.status;
   const replayed = s?.totals?.replay ? HORIZONS.reduce((n, h) => n + (s.totals.replay[h]?.n || 0), 0) : 0;
@@ -493,7 +491,6 @@ async function boot() {
   const gh = `https://github.com/${repo}`;
   $('ghLink').href = gh;
   $('csvLink').href = `${gh}/tree/main/data/predictions`;
-  $('btCsvLink').href = `${gh}/tree/main/data/backtest`;
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { catchUp(); pollStatus(); } });
   let resizeT = 0;
   addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(renderChart, 150); });
