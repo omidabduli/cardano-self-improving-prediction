@@ -276,12 +276,10 @@ function forecastBox(pred, h) {
   const cls = call ? x.direction : 'flat';
   if (!SHOW_MOVE) {
     const shadow = SHADOW_HORIZONS.includes(h);
-    const head = shadow ? 'No reliable signal' : call ? `${up ? '▲ Up' : '▼ Down'}, ${(pr * 100).toFixed(0)}% likely` : 'No clear direction';
-    const note = shadow ? 'Too close to a coin flip in testing.<br>' : '';
+    const head = shadow ? 'No call' : call ? `${up ? '▲ Up' : '▼ Down'}, ${(pr * 100).toFixed(0)}% likely` : 'No clear direction';
     return `<div class="fc">
     <h3 class="fc-h">In ${H_NAME[h]}</h3>
     <p class="fc-call ${shadow ? 'flat' : cls}">${head}</p>
-    <p class="fc-est">${note}Price estimate <b>${F.price(x.price, PRICE_DIGITS)}</b> · today's price</p>
   </div>`;
   }
   const arrow = call ? (up ? '▲' : '▼') : '■';
@@ -312,7 +310,6 @@ function renderForecasts() {
   const t0 = issuedAt(pred.t);
   if (app.incompatible) { $('forecasts').innerHTML = `<div class="fc"><p class="eyebrow">${app.incompatible}</p></div>`; return; }
   $('forecasts').innerHTML = HORIZONS.map((h) => forecastBox(pred, h)).join('');
-  if (!SHOW_MOVE) $('fcNote').textContent = 'The price estimate is just today\'s price. The model only guesses the direction.';
   const next = issuedAt(pred.t) + CADENCE * MINUTE;
   const stale = issuedAt(pred.t) <= tNow - CADENCE * MINUTE;
   $('issueLine').innerHTML = `<span>${stale ? 'Last published forecast, made' : 'Made'} at <b>${F.hhmm(t0)}</b> from ${F.price(pred.c, PRICE_DIGITS)}</span>`
@@ -360,36 +357,23 @@ const totals = (h) => (app.status?.schema?.metrics === 4 ? app.status.totals.all
 
 const pct = (x, d = 1) => (x === null || x === undefined ? '—' : `${(x * 100).toFixed(d)}%`);
 
-// Per horizon: how often the direction was right (non-overlapping calls), with a rough 95%
-// range (Wilson; it ignores that neighbouring hours share market conditions, so if anything it
-// is too narrow). Below ENOUGH_CALLS the page says it is too early to tell.
-const ENOUGH_CALLS = 200;
-function wilson(k, n, z = 1.96) {
-  const p = k / n, d = 1 + z * z / n, m = (p + z * z / (2 * n)) / d, e = (z / d) * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n));
-  return [m - e, m + e];
-}
-
+// Per horizon: how often the direction was right (non-overlapping calls), and how many calls.
 function scoreCell(a, empty) {
   const s = a && summarize(a);
   if (!s || !s.ni) {
-    if (s && s.callShare === 0) return `<td class="big">no call<small>no reliable signal</small></td>`;
+    if (s && s.callShare === 0) return `<td class="big">no call</td>`;
     return `<td class="big">—<small>${empty}</small></td>`;
   }
-  const [lo, hi] = wilson(a.hi, a.ni);
-  const early = s.ni < ENOUGH_CALLS ? ' · too few calls to tell yet' : '';
-  return `<td class="big">${pct(s.accI)}<small>${F.num(s.ni)} calls · probably between ${pct(lo, 0)} and ${pct(hi, 0)}${early}</small></td>`;
+  return `<td class="big">${pct(s.accI)}<small>${F.num(s.ni)} calls</small></td>`;
 }
 
 function renderScores() {
   $('scores').querySelector('tbody').innerHTML = HORIZONS.map((h) => {
-    if (SHADOW_HORIZONS.includes(h)) return `<tr><td class="h">${H_SHORT[h]}</td><td class="big">no call<small>Too close to a coin flip in testing, so no call. It still runs in the background.</small></td></tr>`;
+    if (SHADOW_HORIZONS.includes(h)) return `<tr><td class="h">${H_SHORT[h]}</td><td class="big">no call</td></tr>`;
     return `<tr><td class="h">${H_SHORT[h]}</td>${scoreCell(totals(h), 'first results after ' + H_NAME[h])}</tr>`;
   }).join('');
   const s = app.status;
-  const replayed = s?.totals?.replay ? HORIZONS.reduce((n, h) => n + (s.totals.replay[h]?.n || 0), 0) : 0;
-  $('recordNote').textContent = (s ? `Live record updated ${F.ago(Date.parse(s.updatedAt))}. ` : '')
-    + 'Each hour (or 3 hours) counts once. Calls close to 50% are not counted.'
-    + (replayed ? ` ${F.num(replayed)} late forecasts are left out.` : '');
+  $('recordNote').textContent = s ? `Updated ${F.ago(Date.parse(s.updatedAt))}.` : '';
   if (s?.liveSince) $('liveSince').textContent = `live since ${F.dateShort(Date.parse(s.liveSince))}`;
 }
 
