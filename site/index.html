@@ -55,18 +55,17 @@
 <section class="block alt" id="chart"><div class="wrap">
   <div class="sec-head">
     <div><p class="eyebrow">Chart</p><h2>Guess <em>vs.</em> reality</h2></div>
-    <p>The line is the real price. The band shows where the model expected the price to be an hour later. The arrows are its hourly 1-hour calls: green when right, red when wrong.</p>
+    <p>The line is the real price. The band shows where the model expected the price to be an hour later. The arrows are its hourly 1-hour calls: green for up, red for down, filled when it was right.</p>
   </div>
   <figure class="figure">
     <svg id="chartSvg" class="chart" role="img" aria-label="ADA price over the last 24 hours and the model's prediction"></svg>
     <figcaption class="legend">
       <span><i class="k k-price"></i>Price</span>
       <span><i class="k k-band"></i>Expected range (80%)</span>
-      <span><i class="k k-call"><b class="right">▲</b></i>said up, was right</span>
-      <span><i class="k k-call"><b class="wrong">▲</b></i>said up, was wrong</span>
-      <span><i class="k k-call"><b class="right">▼</b></i>said down, was right</span>
-      <span><i class="k k-call"><b class="wrong">▼</b></i>said down, was wrong</span>
-      <span><i class="k k-call"><b class="open">△</b></i>open call, not checked yet</span>
+      <span><i class="k k-call"><b class="up">▲</b></i>said up, was right</span>
+      <span><i class="k k-call"><b class="up">△</b></i>said up, was wrong</span>
+      <span><i class="k k-call"><b class="down">▼</b></i>said down, was right</span>
+      <span><i class="k k-call"><b class="down">▽</b></i>said down, was wrong</span>
     </figcaption>
   </figure>
 </div></section>
