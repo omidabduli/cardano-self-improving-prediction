@@ -12,7 +12,7 @@ I love prediction, and I wanted to learn how it really works. Nassim Taleb and R
 
 ## What I found
 
-Mostly that it is hard. On a year of data I never used for tuning (September 2024 to September 2025), the model called the 1-hour direction right 53.1% of the time. That is a little better than a coin flip. The 3-hour calls were close to a coin flip in recent months, and the 24-hour ones were worse than one. I still show both, and the live record will say if they're worth anything. No formula for the size of the move beat simply using today's price.
+Mostly that it is hard. On a year of data I never used for tuning (September 2024 to September 2025), the model called the 1-hour direction right 53.1% of the time. That is a little better than a coin flip. The 3-hour calls were close to a coin flip in recent months, and the 24-hour ones were worse than one. I still show both, and the live record will say if they're worth anything. Calls where the model was less than 52% sure were coin flips, so since 28 September it makes no call below that. No formula for the size of the move beat simply using today's price.
 
 So please don't trade on it. At these numbers, fees would eat the difference.
 

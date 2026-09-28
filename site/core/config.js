@@ -97,8 +97,9 @@ export const SHADOW_HORIZONS = [];
 export const SHOW_MOVE = false;
 
 // P(up) closer to 50% than this is no call at all ("no clear direction"): it is shown as 50%
-// and never counted as right or wrong.
-export const NEUTRAL_EDGE = 0.005;
+// and never counted as right or wrong. 0.02 since 28 September 2026: calls under 52% were no
+// better than a coin, on both coins and on the untouched year (docs/EXPERIMENTS.md, "Call rules").
+export const NEUTRAL_EDGE = 0.02;
 
 // "Strong signal": a call whose signal is at least the median of the last STRONG_WINDOW
 // forecasts of the same horizon (7 days), i.e. about the stronger half of recent calls. It is

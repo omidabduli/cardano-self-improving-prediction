@@ -55,7 +55,7 @@ stored and scored:
 |---|---|
 | `p` | P(up): calibrated probability that the price is higher at the horizon, as shown and scored |
 | `pModel` (`pm` in the CSV) | the direction model's own P(up), before a "no reliable signal" horizon sets `p` to 50% |
-| `direction` | `up` / `down`, or `neutral` when P(up) is within 0.5 points of 50% (`NEUTRAL_EDGE`): no call |
+| `direction` | `up` / `down`, or `neutral` when P(up) is within 2 points of 50% (`NEUTRAL_EDGE`): no call |
 | `price` | the one predicted price shown, rounded as displayed: today's price (`SHOW_MOVE = false`) |
 | `est` | ln(price / price now): the shown move, 0 while `SHOW_MOVE` is off |
 | `implied` | the move implied by the model's P(up): (2p − 1) · 0.798 · σ, σ from the 80% range |

@@ -310,6 +310,20 @@ Rules:
 - **An incremental candle cache for GitHub Actions.** Each run fetches what it needs from
   Binance, which stays within the limits (about 10k candles per symbol, 380k on retraining days).
 
+## Call rules (28 September 2026, after launch)
+
+After two days live I looked at when the calls were right, using the past-year test (P12). Three rules looked useful there. I then checked each one on the untouched year (P0) with `research/rules.mjs`, which replays the production system and writes every 1-hour and 3-hour forecast. A rule was switched on only if, on P0, it made the 1-hour calls it kept more often right on both coins, with the 95% week-block interval above zero, and made nothing worse.
+
+Change in how often the kept calls were right, P0, in points (95% interval):
+
+| Rule | BTC 1 h | BTC 3 h | ADA 1 h | ADA 3 h |
+|---|---:|---:|---:|---:|
+| No call below 52% | +1.2 [+0.3, +2.1] | +2.6 [+0.7, +5.0] | +1.9 [+0.6, +3.2] | +2.3 [−0.6, +5.4] |
+| 1-hour call only when the 3-hour call agrees | +0.2 [−0.3, +0.8] | | +0.6 [+0.1, +1.2] | |
+| No calls from 12:00 to 16:00 UTC | +0.4 [−0.1, +0.9] | +0.1 [−1.1, +1.3] | −0.2 [−0.6, +0.2] | −0.7 [−1.9, +0.5] |
+
+Only the first rule held up. On P0 the 1-hour calls it keeps were right 55.5% (BTC) and 54.9% (ADA) of the time, against 54.4% and 53.1% for all calls, and it drops a bit more than half of them. So `NEUTRAL_EDGE` is now 0.02: a forecast within 2 points of 50% is no call. The other two looked good on P12 but not on the year they hadn't seen, so they stay off. It applies from 28 September 2026; earlier rows of the live record keep the calls they were made with.
+
 ## Reproduce
 
 ```bash
