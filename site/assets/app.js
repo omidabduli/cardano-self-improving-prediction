@@ -314,6 +314,51 @@ function renderForecasts() {
   const stale = issuedAt(pred.t) <= tNow - CADENCE * MINUTE;
   $('issueLine').innerHTML = `<span>${stale ? 'Last published forecast, made' : 'Made'} at <b>${F.hhmm(t0)}</b> from ${F.price(pred.c, PRICE_DIGITS)}</span>`
     + `<span>Next forecast in <b>${next > tNow ? F.countdown(next - tNow) : 'a moment'}</b></span>`;
+  if (!stale) notifyForecast(pred);
+}
+
+// ---------------------------------------------------------------- notifications
+
+// Opt-in: while the page is open (a background tab is fine), each new forecast becomes a
+// browser notification. There is no server, so nothing can arrive once the page is closed.
+const NOTIFY_KEY = 'notify';
+let notifiedT = null; // the forecast already shown or announced; the one on screen at load isn't announced
+const notifyOn = () => { try { return localStorage.getItem(NOTIFY_KEY) === '1' && Notification.permission === 'granted'; } catch { return false; } };
+
+function renderNotifyButton() {
+  const b = $('notifyBtn');
+  if (!('Notification' in window)) return;
+  b.hidden = false;
+  b.disabled = Notification.permission === 'denied';
+  b.textContent = Notification.permission === 'denied' ? 'Notifications are blocked in your browser settings'
+    : notifyOn() ? 'Notifications on · turn off' : 'Notify me of new forecasts';
+}
+
+async function toggleNotify() {
+  if (notifyOn()) { try { localStorage.setItem(NOTIFY_KEY, '0'); } catch {} renderNotifyButton(); return; }
+  const perm = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
+  if (perm === 'granted') {
+    try { localStorage.setItem(NOTIFY_KEY, '1'); } catch {}
+    navigator.serviceWorker?.register('sw.js').catch(() => {});
+  }
+  renderNotifyButton();
+}
+
+function notifyForecast(pred) {
+  if (notifiedT === null) { notifiedT = pred.t; return; }
+  if (pred.t === notifiedT) return;
+  notifiedT = pred.t;
+  if (!notifyOn()) return;
+  const part = (h) => {
+    const x = pred.h[h];
+    const call = x.direction === 'up' ? `▲ Up ${Math.round(x.p * 100)}%` : x.direction === 'down' ? `▼ Down ${Math.round((1 - x.p) * 100)}%` : 'no call';
+    return `${H_SHORT[h]}: ${call}`;
+  };
+  const title = `${ASSET.brand} · ${ASSET.coin} ${F.price(pred.c, PRICE_DIGITS)}`;
+  const opts = { body: HORIZONS.map(part).join(' · '), tag: 'forecast', icon: 'assets/favicon.svg' };
+  const show = (reg) => (reg ? reg.showNotification(title, opts) : new Notification(title, opts));
+  (navigator.serviceWorker ? navigator.serviceWorker.getRegistration() : Promise.resolve(null))
+    .then((reg) => show(reg)).catch(() => { try { new Notification(title, opts); } catch {} });
 }
 
 function renderChart() {
@@ -353,7 +398,7 @@ function renderChart() {
 }
 
 // the published live record only (forecasts made on time; backfilled ones are counted apart)
-const totals = (h) => (app.status?.schema?.metrics === 4 ? app.status.totals.all[h] : null);
+const totals = (h) => (app.status?.schema?.metrics === 4 ? app.status.totals.d7?.[h] : null); // the last 7 days
 
 const pct = (x, d = 1) => (x === null || x === undefined ? '—' : `${(x * 100).toFixed(d)}%`);
 
@@ -374,7 +419,6 @@ function renderScores() {
   }).join('');
   const s = app.status;
   $('recordNote').textContent = s ? `Updated ${F.ago(Date.parse(s.updatedAt))}.` : '';
-  if (s?.liveSince) $('liveSince').textContent = `live since ${F.dateShort(Date.parse(s.liveSince))}`;
 }
 
 function renderLog() {
@@ -477,6 +521,9 @@ async function boot() {
   const gh = `https://github.com/${repo}`;
   $('ghLink').href = gh;
   $('csvLink').href = `${gh}/tree/main/data/predictions`;
+  renderNotifyButton();
+  $('notifyBtn').addEventListener('click', toggleNotify);
+  if (notifyOn()) navigator.serviceWorker?.register('sw.js').catch(() => {});
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { catchUp(); pollStatus(); } });
   let resizeT = 0;
   addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(renderChart, 150); });

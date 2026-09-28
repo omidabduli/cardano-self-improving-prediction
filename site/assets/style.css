@@ -87,6 +87,9 @@ section.alt{background:var(--surface)}
 .now-price{font-family:var(--serif);font-weight:300;font-size:clamp(44px,5.6vw,64px);line-height:1;font-variant-numeric:tabular-nums}
 .now-meta{font-family:var(--mono);font-size:13px;color:var(--muted)}
 .facts{display:flex;flex-wrap:wrap;gap:8px 20px;margin-top:20px;font-size:14px;color:var(--muted)}
+.notify{margin-top:16px}
+.notify .btn{padding:9px 16px;font-size:14px}
+.notify .btn:disabled{opacity:.6;cursor:default}
 .facts b{font-weight:500;color:var(--ink-2);font-variant-numeric:tabular-nums}
 .banner{margin-top:20px;padding:12px 16px;border:1px dashed var(--muted);border-radius:14px;font-size:14px;color:var(--ink-2);max-width:72ch}
 
