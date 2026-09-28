@@ -39,6 +39,7 @@
   <p class="eyebrow">ADA / USDT · live from Binance · <span id="liveState" class="live">connecting</span></p>
   <h1>A small experiment in <em>guessing</em> where Cardano goes next.</h1>
   <p class="lede">I built this to learn how forecasting works. Every 15 minutes it guesses whether the price will be higher in 1, 3 and 24 hours, and every guess is checked later. Please don't trade on it.</p>
+  <blockquote class="quote"><p>“Invest in preparedness, not in prediction.”</p><cite>Nassim Nicholas Taleb, <i>The Black Swan</i></cite></blockquote>
 
   <div class="now">
     <span class="now-price" id="price">—</span>
@@ -57,6 +58,7 @@
   <div class="sec-head">
     <div><p class="eyebrow">Chart</p><h2>Guess <em>vs.</em> reality</h2></div>
     <p>The line is the real price. The band shows where the model expected the price to be an hour later. The arrows are its hourly 1-hour calls: green for up, red for down, filled when it was right.</p>
+  <blockquote class="quote"><p>“Don't cross a river if it is four feet deep on average.”</p><cite>Nassim Nicholas Taleb</cite></blockquote>
   </div>
   <figure class="figure">
     <svg id="chartSvg" class="chart" role="img" aria-label="ADA price over the last 24 hours and the model's prediction"></svg>
@@ -69,12 +71,14 @@
       <span><i class="k k-call"><b class="down">▽</b></i>said down, was wrong</span>
     </figcaption>
   </figure>
+  <blockquote class="quote"><p>“History and societies do not crawl. They make jumps.”</p><cite>Nassim Nicholas Taleb, <i>The Black Swan</i></cite></blockquote>
 </div></section>
 
 <section class="block" id="record"><div class="wrap">
   <div class="sec-head">
     <div><p class="eyebrow">Record · last 7 days</p><h2>How often it was right</h2></div>
     <p>50% is what a coin flip would get. Even at 53%, trading fees would likely eat the difference. How I tested it is in the <a href="https://github.com/omidabduli/cardano-self-improving-prediction/blob/main/docs/EXPERIMENTS.md">experiment report</a>.</p>
+  <blockquote class="quote"><p>“The problem with experts is that they do not know what they do not know.”</p><cite>Nassim Nicholas Taleb, <i>The Black Swan</i></cite></blockquote>
   </div>
   <div class="table-wrap">
     <table class="scores" id="scores">
@@ -92,12 +96,14 @@
     </table>
   </div>
   <p class="note">Every prediction is saved as a <a id="csvLink" href="#">CSV file on GitHub</a>.</p>
+  <blockquote class="quote"><p>“A Black Swan for the turkey is not a Black Swan for the butcher.”</p><cite>Nassim Nicholas Taleb, <i>The Black Swan</i></cite></blockquote>
 </div></section>
 
 <section class="block alt" id="method"><div class="wrap">
   <div class="sec-head">
     <div><p class="eyebrow">Method</p><h2>How it works</h2></div>
     <p>The model runs in your browser. A GitHub job runs it too, every 15 minutes, and saves the record.</p>
+  <blockquote class="quote"><p>“Wind extinguishes a candle and energizes fire.”</p><cite>Nassim Nicholas Taleb, <i>Antifragile</i></cite></blockquote>
   </div>
   <ol class="steps">
     <li><span class="yr">01</span><h3>Reads the market</h3><p>A week of minute prices for Cardano, Bitcoin and Ethereum, plus the Fear &amp; Greed index.</p></li>
@@ -106,6 +112,7 @@
     <li><span class="yr">04</span><h3>Gets checked</h3><p>Every forecast is compared with the real price later. Forecasts made late after an outage don't count.</p></li>
     <li><span class="yr">05</span><h3>Retrains every night</h3><p>New settings are only kept if they do better on days the model hasn't seen.</p></li>
   </ol>
+  <blockquote class="quote"><p>“Don't tell me what you think, tell me what you have in your portfolio.”</p><cite>Nassim Nicholas Taleb, <i>Skin in the Game</i></cite></blockquote>
 </div></section>
 
 <footer><div class="wrap">

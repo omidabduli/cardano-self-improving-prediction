@@ -87,6 +87,10 @@ section.alt{background:var(--surface)}
 .now-price{font-family:var(--serif);font-weight:300;font-size:clamp(44px,5.6vw,64px);line-height:1;font-variant-numeric:tabular-nums}
 .now-meta{font-family:var(--mono);font-size:13px;color:var(--muted)}
 .facts{display:flex;flex-wrap:wrap;gap:8px 20px;margin-top:20px;font-size:14px;color:var(--muted)}
+.quote{margin:28px 0 0;padding-left:16px;border-left:2px solid var(--clay);max-width:60ch}
+.quote p{font-family:var(--serif);font-style:italic;font-weight:300;font-size:clamp(18px,1.6vw,21px);line-height:1.4;color:var(--ink-2)}
+.quote cite{display:block;margin-top:6px;font-style:normal;font-size:13px;color:var(--muted)}
+.sec-head .quote{grid-column:-2;margin-top:0}
 .notify{margin-top:16px}
 .notify .btn{padding:9px 16px;font-size:14px}
 .notify .btn:disabled{opacity:.6;cursor:default}
