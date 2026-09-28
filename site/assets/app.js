@@ -398,15 +398,17 @@ function renderLog() {
     const y = Math.log(c1 / p.c);
     const call = x.direction === 'up' || x.direction === 'down';
     const right = y !== 0 && (y > 0) === (x.direction === 'up');
+    const likely = call ? `<span class="${x.direction}">${x.direction === 'up' ? '▲ Up' : '▼ Down'} ${Math.round((x.direction === 'up' ? x.p : 1 - x.p) * 100)}%</span>` : '<span class="flat">none</span>';
     const verdict = !call ? '<span class="status planned">no call</span>' : y === 0 ? '<span class="status planned">flat</span>' : `<span class="status ${right ? 'done' : 'active'}">${right ? 'right' : 'wrong'}</span>`;
     return `<tr>
       <td class="num">${when(issuedAt(t))}</td>
       <td>${H_SHORT[h]}</td>
+      <td class="num">${likely}</td>
       <td class="num">${F.price(x.price, PRICE_DIGITS)}</td>
       <td class="num">${F.price(c1, PRICE_DIGITS)}</td>
       <td>${verdict}</td>
     </tr>`;
-  }).join('') || `<tr><td colspan="5">The first predictions are checked one hour after launch.</td></tr>`;
+  }).join('') || `<tr><td colspan="6">The first predictions are checked one hour after launch.</td></tr>`;
   // the box stays LOG_ROWS rows tall; older rows scroll
   const wrap = $('logWrap'), trs = wrap.querySelectorAll('tbody tr');
   wrap.style.maxHeight = trs.length > LOG_ROWS ? `${trs[LOG_ROWS].offsetTop}px` : '';
