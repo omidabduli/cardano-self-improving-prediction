@@ -430,6 +430,7 @@ function renderLog() {
       if (SHADOW_HORIZONS.includes(h)) continue;
       const c1 = closeAt(t + h * MINUTE);
       if (t + h * MINUTE > tNow || c1 === undefined) continue;
+      if (p.h[h].direction !== 'up' && p.h[h].direction !== 'down') continue;
       rows.push({ t, h, p, c1, due: issuedAt(t) + h * MINUTE });
     }
   }
