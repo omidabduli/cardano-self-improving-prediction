@@ -1,8 +1,8 @@
 {
- "updatedAt": "2026-09-30T05:46:19.941Z",
+ "updatedAt": "2026-09-30T05:54:57.592Z",
  "siteVersion": "6916c74aad54",
- "t": 1790747100000,
- "price": 0.2464,
+ "t": 1790747580000,
+ "price": 0.2458,
  "liveSince": "2026-09-26T23:54:00.000Z",
  "schema": {
   "record": 4,
@@ -26,23 +26,23 @@
   "forest"
  ],
  "run": {
-  "id": "36674926347",
-  "sha": "031bde0",
+  "id": "36675605719",
+  "sha": "5bdccb0",
   "host": "https://data-api.binance.vision",
-  "replayed": 15,
+  "replayed": 8,
   "retrained": false,
-  "durationMs": 1217,
-  "runs": 329,
+  "durationMs": 1518,
+  "runs": 330,
   "trainError": null,
   "forecasts": {
-   "live": 1,
+   "live": 0,
    "replay": 0,
    "suspended": 0,
    "unavailable": 0
   }
  },
  "health": {
-  "dataEnd": "2026-09-30T05:45",
+  "dataEnd": "2026-09-30T05:53",
   "dataLagMin": 0,
   "modelAgeH": 6,
   "trainError": null,
